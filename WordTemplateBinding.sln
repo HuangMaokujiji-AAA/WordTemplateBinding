@@ -1,0 +1,42 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WordTemplateBinding.Core", "src\WordTemplateBinding.Core\WordTemplateBinding.Core.csproj", "{A15D4AFD-1388-4F49-93C2-E39B4B33CC01}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WordTemplateBinding.Infrastructure", "src\WordTemplateBinding.Infrastructure\WordTemplateBinding.Infrastructure.csproj", "{B25D4AFD-1388-4F49-93C2-E39B4B33CC02}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WordTemplateBinding.Api", "src\WordTemplateBinding.Api\WordTemplateBinding.Api.csproj", "{C35D4AFD-1388-4F49-93C2-E39B4B33CC03}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WordTemplateBinding.UnitTests", "tests\WordTemplateBinding.UnitTests\WordTemplateBinding.UnitTests.csproj", "{D45D4AFD-1388-4F49-93C2-E39B4B33CC04}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WordTemplateBinding.IntegrationTests", "tests\WordTemplateBinding.IntegrationTests\WordTemplateBinding.IntegrationTests.csproj", "{E55D4AFD-1388-4F49-93C2-E39B4B33CC05}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{A15D4AFD-1388-4F49-93C2-E39B4B33CC01}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A15D4AFD-1388-4F49-93C2-E39B4B33CC01}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A15D4AFD-1388-4F49-93C2-E39B4B33CC01}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A15D4AFD-1388-4F49-93C2-E39B4B33CC01}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B25D4AFD-1388-4F49-93C2-E39B4B33CC02}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B25D4AFD-1388-4F49-93C2-E39B4B33CC02}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B25D4AFD-1388-4F49-93C2-E39B4B33CC02}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B25D4AFD-1388-4F49-93C2-E39B4B33CC02}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C35D4AFD-1388-4F49-93C2-E39B4B33CC03}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C35D4AFD-1388-4F49-93C2-E39B4B33CC03}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C35D4AFD-1388-4F49-93C2-E39B4B33CC03}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C35D4AFD-1388-4F49-93C2-E39B4B33CC03}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D45D4AFD-1388-4F49-93C2-E39B4B33CC04}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D45D4AFD-1388-4F49-93C2-E39B4B33CC04}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D45D4AFD-1388-4F49-93C2-E39B4B33CC04}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D45D4AFD-1388-4F49-93C2-E39B4B33CC04}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E55D4AFD-1388-4F49-93C2-E39B4B33CC05}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E55D4AFD-1388-4F49-93C2-E39B4B33CC05}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E55D4AFD-1388-4F49-93C2-E39B4B33CC05}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E55D4AFD-1388-4F49-93C2-E39B4B33CC05}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

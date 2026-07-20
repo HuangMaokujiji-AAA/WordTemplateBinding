@@ -1,0 +1,44 @@
+# .NET build outputs and intermediate files
+[Bb]in/
+[Oo]bj/
+artifacts/
+.codex-test-output/
+
+# Test and coverage outputs
+[Tt]est[Rr]esults/
+coverage/
+*.trx
+*.coverage
+*.coveragexml
+
+# NuGet and generated packages
+packages/
+*.nupkg
+*.snupkg
+
+# IDE and editor caches
+.vs/
+.vscode/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Compiler, analyzer, and temporary caches
+*.cache
+*.tmp
+*.temp
+*.log
+*.pid
+BenchmarkDotNet.Artifacts/
+
+# Local agent metadata and project documentation
+.agents/
+docs/
+
+# Operating-system metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
+__MACOSX/

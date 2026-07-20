@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Word 模板可视化数据绑定</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/css/site.css">
+</head>
+<body>
+  <header class="toolbar">
+    <div class="brand">
+      <span class="brand-mark">W</span>
+      <div>
+        <h1>Word 模板可视化数据绑定</h1>
+        <p>第一阶段 MVP · 结构化预览</p>
+      </div>
+    </div>
+    <div class="toolbar-actions">
+      <input id="fileInput" type="file" accept=".docx" hidden>
+      <button id="uploadButton" class="button primary" type="button">上传 DOCX</button>
+      <button id="rescanButton" class="button" type="button" disabled>重新扫描</button>
+      <button id="generateButton" class="button success" type="button" disabled>生成报告</button>
+    </div>
+    <div class="template-summary">
+      <strong id="templateName">尚未上传模板</strong>
+      <span id="bindingCount">绑定 0 项</span>
+      <span id="statusText" role="status">请选择一个 DOCX 模板</span>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <aside class="panel left-panel">
+      <section class="panel-section">
+        <h2>模板信息</h2>
+        <dl class="metadata">
+          <div><dt>模拟数据</dt><dd id="mockCount">0</dd></div>
+          <div><dt>已绑定</dt><dd id="leftBindingCount">0</dd></div>
+          <div><dt>内容哈希</dt><dd id="contentHash">—</dd></div>
+        </dl>
+      </section>
+      <section class="panel-section navigation-section">
+        <h2>段落导航</h2>
+        <nav id="paragraphNavigation" class="paragraph-navigation" aria-label="文档段落导航">
+          <p class="empty-state">上传模板后显示段落</p>
+        </nav>
+      </section>
+    </aside>
+
+    <section class="preview-column">
+      <div class="preview-notice">
+        这是按段落构建的结构化预览，不代表 Microsoft Word 的真实分页或像素坐标。
+      </div>
+      <article id="documentPreview" class="a4-preview" aria-label="模板结构化预览">
+        <div class="preview-placeholder">
+          <span class="placeholder-icon">DOCX</span>
+          <h2>上传模板开始绑定</h2>
+          <p>系统会识别小数、整数和 [[text:示例文字]] 显式文字标记。</p>
+        </div>
+      </article>
+    </section>
+
+    <aside class="panel right-panel">
+      <div class="tabs" role="tablist">
+        <button class="tab active" type="button" role="tab" data-tab="schema">数据源</button>
+        <button class="tab" type="button" role="tab" data-tab="bindings">已绑定</button>
+        <button class="tab" type="button" role="tab" data-tab="properties">属性</button>
+      </div>
+
+      <section id="schemaTab" class="tab-panel active" data-panel="schema">
+        <label class="search-box">
+          <span class="visually-hidden">搜索数据字段</span>
+          <input id="schemaSearch" type="search" placeholder="搜索字段名称或路径">
+        </label>
+        <p id="schemaSummary" class="small-note">正在加载字段树…</p>
+        <div id="schemaTree" class="schema-tree"></div>
+      </section>
+
+      <section id="bindingsTab" class="tab-panel" data-panel="bindings">
+        <div id="bindingList" class="binding-list">
+          <p class="empty-state">尚无绑定关系</p>
+        </div>
+      </section>
+
+      <section id="propertiesTab" class="tab-panel" data-panel="properties">
+        <div id="propertiesPanel" class="properties-panel">
+          <p class="empty-state">点击中间的高亮模拟数据查看属性</p>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>

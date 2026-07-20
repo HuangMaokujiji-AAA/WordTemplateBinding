@@ -1,0 +1,143 @@
+using WordTemplateBinding.Core.Enums;
+using WordTemplateBinding.Core.Exceptions;
+using WordTemplateBinding.Core.Interfaces;
+using WordTemplateBinding.Core.Models;
+
+namespace WordTemplateBinding.Core.Services;
+
+/// <summary>
+/// 负责模板绑定关系的校验、保存与删除。
+/// </summary>
+public sealed class BindingWorkflowService
+{
+    private readonly ITemplateStore _templateStore;
+    private readonly IBindingStore _bindingStore;
+    private readonly IDataSchemaProvider _schemaProvider;
+    private readonly IClock _clock;
+
+    /// <summary>
+    /// 初始化绑定业务服务。
+    /// </summary>
+    /// <param name="templateStore">模板存储。</param>
+    /// <param name="bindingStore">绑定存储。</param>
+    /// <param name="schemaProvider">数据字段来源。</param>
+    /// <param name="clock">系统时间来源。</param>
+    public BindingWorkflowService(
+        ITemplateStore templateStore,
+        IBindingStore bindingStore,
+        IDataSchemaProvider schemaProvider,
+        IClock clock)
+    {
+        _templateStore = templateStore;
+        _bindingStore = bindingStore;
+        _schemaProvider = schemaProvider;
+        _clock = clock;
+    }
+
+    /// <summary>
+    /// 新增或覆盖一条模板绑定。
+    /// </summary>
+    /// <param name="templateId">模板唯一标识。</param>
+    /// <param name="locatorId">模拟数据定位标识。</param>
+    /// <param name="dataPath">数据字段路径。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>返回保存后的绑定。</returns>
+    public async Task<TemplateBinding> UpsertAsync(
+        Guid templateId,
+        string locatorId,
+        string dataPath,
+        CancellationToken cancellationToken = default)
+    {
+        TemplateDocument template = await _templateStore.GetAsync(templateId, cancellationToken)
+            ?? throw new TemplateNotFoundException(templateId);
+        MockDataItem mockItem = template.ScanResult.MockItems.FirstOrDefault(
+                item => string.Equals(item.LocatorId, locatorId, StringComparison.Ordinal))
+            ?? throw new LocatorNotFoundException(locatorId);
+        DataFieldDefinition field = await _schemaProvider.FindByPathAsync(dataPath, cancellationToken)
+            ?? throw new DataFieldNotFoundException(dataPath);
+
+        ValidateCompatibility(mockItem, field);
+
+        IReadOnlyList<TemplateBinding> currentBindings =
+            await _bindingStore.GetByTemplateAsync(templateId, cancellationToken);
+        TemplateBinding? current = currentBindings.FirstOrDefault(
+            binding => string.Equals(binding.LocatorId, locatorId, StringComparison.Ordinal));
+        DateTimeOffset now = _clock.UtcNow;
+        TemplateBinding binding = new()
+        {
+            TemplateId = templateId,
+            LocatorId = locatorId,
+            DataPath = field.Path,
+            DataType = field.Type,
+            CreatedAt = current?.CreatedAt ?? now,
+            UpdatedAt = now,
+        };
+
+        await _bindingStore.UpsertAsync(binding, cancellationToken);
+        return binding;
+    }
+
+    /// <summary>
+    /// 获取指定模板的全部绑定。
+    /// </summary>
+    /// <param name="templateId">模板唯一标识。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>返回绑定关系只读列表。</returns>
+    public async Task<IReadOnlyList<TemplateBinding>> GetByTemplateAsync(
+        Guid templateId,
+        CancellationToken cancellationToken = default)
+    {
+        if (await _templateStore.GetAsync(templateId, cancellationToken) is null)
+        {
+            throw new TemplateNotFoundException(templateId);
+        }
+
+        return await _bindingStore.GetByTemplateAsync(templateId, cancellationToken);
+    }
+
+    /// <summary>
+    /// 删除一条模板绑定。
+    /// </summary>
+    /// <param name="templateId">模板唯一标识。</param>
+    /// <param name="locatorId">模拟数据定位标识。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>返回是否删除了已有绑定。</returns>
+    public async Task<bool> DeleteAsync(
+        Guid templateId,
+        string locatorId,
+        CancellationToken cancellationToken = default)
+    {
+        if (await _templateStore.GetAsync(templateId, cancellationToken) is null)
+        {
+            throw new TemplateNotFoundException(templateId);
+        }
+
+        return await _bindingStore.DeleteAsync(templateId, locatorId, cancellationToken);
+    }
+
+    /// <summary>
+    /// 校验模拟数据类型与字段类型是否满足第一阶段兼容矩阵。
+    /// </summary>
+    /// <param name="mockItem">模板模拟数据。</param>
+    /// <param name="field">数据字段定义。</param>
+    private static void ValidateCompatibility(MockDataItem mockItem, DataFieldDefinition field)
+    {
+        if (!field.IsBindable)
+        {
+            throw new BindingValidationException($"字段 {field.Path} 在第一阶段不可绑定。");
+        }
+
+        bool isCompatible = mockItem.DataType switch
+        {
+            MockDataType.Decimal or MockDataType.Integer =>
+                field.Type is DataValueType.Integer or DataValueType.Decimal,
+            MockDataType.String => field.Type == DataValueType.String,
+            _ => false,
+        };
+        if (!isCompatible)
+        {
+            throw new BindingValidationException(
+                $"{mockItem.DataType} 型模拟数据不能绑定到 {field.Type} 字段 {field.Path}。");
+        }
+    }
+}
