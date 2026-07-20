@@ -1,6 +1,22 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <FrontendRoot>$(MSBuildProjectDirectory)\..\..\frontend</FrontendRoot>
+  </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="../WordTemplateBinding.Core/WordTemplateBinding.Core.csproj" />
     <ProjectReference Include="../WordTemplateBinding.Infrastructure/WordTemplateBinding.Infrastructure.csproj" />
   </ItemGroup>
+
+  <!--
+    Production assets are committed under wwwroot. During publish, rebuild them
+    when local frontend dependencies are available; CI may set
+    SkipFrontendBuild=true and build the frontend in a separate job.
+  -->
+  <Target
+    Name="BuildVueFrontend"
+    BeforeTargets="ComputeFilesToPublish"
+    Condition="'$(SkipFrontendBuild)' != 'true' and Exists('$(FrontendRoot)\node_modules')">
+    <Exec WorkingDirectory="$(FrontendRoot)" Command="npm run build" />
+  </Target>
 </Project>

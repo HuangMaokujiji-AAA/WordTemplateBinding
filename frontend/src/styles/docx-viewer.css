@@ -1,0 +1,27 @@
+/* Styles for the docx-preview rendered document container */
+
+.docx-viewer-wrapper {
+  background: #f0f0f0;
+  min-height: 400px;
+  padding: 20px 12px 36px;
+}
+
+.docx-viewer__document {
+  max-width: 900px;
+  margin: 0 auto;
+  min-height: 600px;
+}
+
+.docx-viewer__document:empty {
+  background: #fafafa;
+}
+
+.docx-viewer__document .docx-wrapper {
+  padding: 0 !important;
+  background: transparent !important;
+}
+
+.docx-viewer__document .docx-wrapper > section.docx {
+  margin: 0 auto 20px;
+  box-shadow: 0 8px 28px rgb(16 24 40 / 18%);
+}
