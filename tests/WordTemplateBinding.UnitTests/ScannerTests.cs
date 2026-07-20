@@ -199,13 +199,13 @@ public sealed class ScannerTests
     public async Task ScanAsync_ExplicitTextMarker_ReturnsStringItem()
     {
         TemplateScanResult result = await _scanner.ScanAsync(
-            OpenXmlTestDocumentFactory.CreateParagraphDocument("标题[[text:年度报告]]结束"));
+            OpenXmlTestDocumentFactory.CreateParagraphDocument("标题{{text:年度报告}}结束"));
 
         MockDataItem item = Assert.Single(result.MockItems);
         Assert.Equal("年度报告", item.MockValue);
         Assert.Equal(MockDataType.String, item.DataType);
-        Assert.Equal("[[text:年度报告]]", item.Locator.OriginalValue);
-        Assert.Equal("[[text:年度报告]]".Length, item.Locator.Length);
+        Assert.Equal("{{text:年度报告}}", item.Locator.OriginalValue);
+        Assert.Equal("{{text:年度报告}}".Length, item.Locator.Length);
     }
 
     /// <summary>
@@ -215,7 +215,7 @@ public sealed class ScannerTests
     public async Task ScanAsync_ExplicitTextMarkerAcrossRuns_ReturnsOneItem()
     {
         TemplateScanResult result = await _scanner.ScanAsync(
-            OpenXmlTestDocumentFactory.CreateParagraphDocument("[[text:", "年度", "报告]]"));
+            OpenXmlTestDocumentFactory.CreateParagraphDocument("{{text:", "年度", "报告}}"));
 
         MockDataItem item = Assert.Single(result.MockItems);
         Assert.Equal("年度报告", item.MockValue);
@@ -229,11 +229,23 @@ public sealed class ScannerTests
     public async Task ScanAsync_NumberInsideTextMarker_ReturnsOnlyStringItem()
     {
         TemplateScanResult result = await _scanner.ScanAsync(
-            OpenXmlTestDocumentFactory.CreateParagraphDocument("版本[[text:第12.5版]]"));
+            OpenXmlTestDocumentFactory.CreateParagraphDocument("版本{{text:第12.5版}}"));
 
         MockDataItem item = Assert.Single(result.MockItems);
         Assert.Equal("第12.5版", item.MockValue);
         Assert.Equal(MockDataType.String, item.DataType);
+    }
+
+    /// <summary>
+    /// 验证旧的双方括号文字语法不再被识别。
+    /// </summary>
+    [Fact]
+    public async Task ScanAsync_LegacyTextMarker_ReturnsNoItems()
+    {
+        TemplateScanResult result = await _scanner.ScanAsync(
+            OpenXmlTestDocumentFactory.CreateParagraphDocument("标题[[text:年度报告]]"));
+
+        Assert.Empty(result.MockItems);
     }
 
     /// <summary>

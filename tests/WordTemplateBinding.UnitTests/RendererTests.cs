@@ -215,7 +215,7 @@ public sealed class RendererTests
     public async Task RenderAsync_ExplicitTextMarker_ReplacesWholeMarker()
     {
         byte[] bytes = OpenXmlTestDocumentFactory.CreateParagraphDocument(
-            "标题[[text:年度报告]]结束");
+            "标题{{text:年度报告}}结束");
         TemplateScanResult scan = await _scanner.ScanAsync(bytes);
         TemplateDocument template = TestServiceFactory.CreateTemplate(bytes, scan);
         TemplateBinding binding = CreateBinding(

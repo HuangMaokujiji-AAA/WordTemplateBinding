@@ -100,7 +100,7 @@ public sealed class ApiWorkflowTests : IClassFixture<WebApplicationFactory<Progr
     public async Task Upload_MixedMockData_ReturnsTypedItems()
     {
         using JsonDocument upload = await UploadTemplateAsync(
-            "标题[[text:年度报告]]，人数1200人，成绩88.5分");
+            "标题{{text:年度报告}}，人数1200人，成绩88.5分");
         JsonElement[] items = upload.RootElement
             .GetProperty("mockItems")
             .EnumerateArray()
@@ -114,7 +114,7 @@ public sealed class ApiWorkflowTests : IClassFixture<WebApplicationFactory<Progr
             new[] { "String", "Integer", "Decimal" },
             items.Select(item => item.GetProperty("dataType").GetString()));
         Assert.Equal(
-            "[[text:年度报告]]",
+            "{{text:年度报告}}",
             items[0].GetProperty("locator").GetProperty("originalValue").GetString());
     }
 

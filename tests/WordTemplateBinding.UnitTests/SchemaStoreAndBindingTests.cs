@@ -132,7 +132,7 @@ public sealed class SchemaStoreAndBindingTests
             "StudentStatistics.StudentCount");
 
         (BindingWorkflowService stringService, TemplateDocument stringTemplate, MockDataItem stringItem) =
-            await CreateBindingServiceAsync("标题[[text:年度报告]]");
+            await CreateBindingServiceAsync("标题{{text:年度报告}}");
         TemplateBinding stringBinding = await stringService.UpsertAsync(
             stringTemplate.Id,
             stringItem.LocatorId,
