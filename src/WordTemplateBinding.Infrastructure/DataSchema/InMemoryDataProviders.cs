@@ -26,7 +26,7 @@ public sealed class InMemoryDataSchemaProvider : IDataSchemaProvider
         _searchableNodes = new ReadOnlyCollection<DataFieldNode>(allNodes);
         _definitions = new ReadOnlyDictionary<string, DataFieldDefinition>(
             allNodes
-                .Where(node => node.IsLeaf)
+                .Where(node => node.IsBindable)
                 .ToDictionary(
                     node => node.Path,
                     node => new DataFieldDefinition
@@ -132,6 +132,21 @@ public sealed class InMemoryDataSchemaProvider : IDataSchemaProvider
                 Leaf("成绩", "Students[].Score", DataValueType.Decimal, false),
             }),
         };
+        DataFieldNode chartData = new()
+        {
+            Name = "图表数据",
+            Path = "ChartData.ScienceScores",
+            Type = DataValueType.Array,
+            IsCollection = true,
+            IsLeaf = false,
+            IsBindable = true,
+            Children = new ReadOnlyCollection<DataFieldNode>(new[]
+            {
+                Leaf("分类", "ChartData.ScienceScores[].Category", DataValueType.String, false),
+                Leaf("你县", "ChartData.ScienceScores[].你县", DataValueType.Decimal, false),
+                Leaf("全省", "ChartData.ScienceScores[].全省", DataValueType.Decimal, false),
+            }),
+        };
 
         List<DataFieldNode> departments = new(100);
         for (int departmentIndex = 1; departmentIndex <= 100; departmentIndex++)
@@ -159,7 +174,7 @@ public sealed class InMemoryDataSchemaProvider : IDataSchemaProvider
             DataValueType.String,
             departments);
         return new ReadOnlyCollection<DataFieldNode>(
-            new[] { studentStatistics, report, students, generatedRoot });
+            new[] { studentStatistics, report, students, chartData, generatedRoot });
     }
 
     /// <summary>
@@ -262,6 +277,22 @@ public sealed class InMemoryDataValueProvider : IDataValueProvider
             ["Report.Title"] = "本年度学生成绩统计报告",
             ["Report.GeneratedAt"] = new DateTimeOffset(2026, 7, 17, 0, 0, 0, TimeSpan.Zero),
             ["Report.IsFinal"] = true,
+            ["ChartData.ScienceScores"] = new ReadOnlyCollection<IReadOnlyDictionary<string, object?>>(
+                new IReadOnlyDictionary<string, object?>[]
+                {
+                    new ReadOnlyDictionary<string, object?>(new Dictionary<string, object?>
+                    {
+                        ["Category"] = "四年级",
+                        ["你县"] = 552m,
+                        ["全省"] = 506m,
+                    }),
+                    new ReadOnlyDictionary<string, object?>(new Dictionary<string, object?>
+                    {
+                        ["Category"] = "八年级",
+                        ["你县"] = 518m,
+                        ["全省"] = 493m,
+                    }),
+                }),
         };
 
         for (int departmentIndex = 1; departmentIndex <= 100; departmentIndex++)

@@ -26,7 +26,7 @@ function toggle(): void {
 }
 
 function selectField(): void {
-  if (props.node.isLeaf && props.node.isBindable) {
+  if (props.node.isBindable) {
     emit("field-selected", props.node);
   } else if (props.node.children.length > 0) {
     toggle();
@@ -34,7 +34,7 @@ function selectField(): void {
 }
 
 function handleDragStart(event: DragEvent): void {
-  if (!props.node.isLeaf || !props.node.isBindable || !event.dataTransfer) {
+  if (!props.node.isBindable || !event.dataTransfer) {
     event.preventDefault();
     return;
   }
@@ -61,11 +61,13 @@ function handleDragStart(event: DragEvent): void {
       <button
         class="schema-label"
         type="button"
-        :draggable="node.isLeaf && node.isBindable"
-        :class="{ 'is-bindable': node.isLeaf && node.isBindable }"
+        :draggable="node.isBindable"
+        :class="{ 'is-bindable': node.isBindable }"
         :title="
-          node.isLeaf && node.isBindable
-            ? '点击绑定到当前选中值，或拖拽到文档高亮处'
+          node.isBindable
+            ? node.type === 'Array'
+              ? '点击绑定到当前选中图表，或拖拽到图表区域'
+              : '点击绑定到当前选中值，或拖拽到文档高亮处'
             : node.isLeaf
               ? '该字段当前不可绑定'
               : '展开字段分组'

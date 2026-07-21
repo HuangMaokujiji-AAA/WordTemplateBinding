@@ -50,13 +50,22 @@ public sealed class BindingWorkflowService
     {
         TemplateDocument template = await _templateStore.GetAsync(templateId, cancellationToken)
             ?? throw new TemplateNotFoundException(templateId);
-        MockDataItem mockItem = template.ScanResult.MockItems.FirstOrDefault(
-                item => string.Equals(item.LocatorId, locatorId, StringComparison.Ordinal))
-            ?? throw new LocatorNotFoundException(locatorId);
+        MockDataItem? mockItem = template.ScanResult.MockItems.FirstOrDefault(
+            item => string.Equals(item.LocatorId, locatorId, StringComparison.Ordinal));
+        ChartTemplateItem? chartItem = template.ScanResult.Charts.FirstOrDefault(
+            item => string.Equals(item.LocatorId, locatorId, StringComparison.Ordinal));
+        if (mockItem is null && chartItem is null)
+        {
+            throw new LocatorNotFoundException(locatorId);
+        }
+
         DataFieldDefinition field = await _schemaProvider.FindByPathAsync(dataPath, cancellationToken)
             ?? throw new DataFieldNotFoundException(dataPath);
 
-        ValidateCompatibility(mockItem, field);
+        BindingTargetKind targetKind = chartItem is null
+            ? BindingTargetKind.Text
+            : BindingTargetKind.Chart;
+        ValidateCompatibility(mockItem, chartItem, field);
 
         IReadOnlyList<TemplateBinding> currentBindings =
             await _bindingStore.GetByTemplateAsync(templateId, cancellationToken);
@@ -66,6 +75,7 @@ public sealed class BindingWorkflowService
         TemplateBinding binding = new()
         {
             TemplateId = templateId,
+            TargetKind = targetKind,
             LocatorId = locatorId,
             DataPath = field.Path,
             DataType = field.Type,
@@ -119,12 +129,38 @@ public sealed class BindingWorkflowService
     /// 校验模拟数据类型与字段类型是否满足第一阶段兼容矩阵。
     /// </summary>
     /// <param name="mockItem">模板模拟数据。</param>
+    /// <param name="chartItem">模板图表目标。</param>
     /// <param name="field">数据字段定义。</param>
-    private static void ValidateCompatibility(MockDataItem mockItem, DataFieldDefinition field)
+    private static void ValidateCompatibility(
+        MockDataItem? mockItem,
+        ChartTemplateItem? chartItem,
+        DataFieldDefinition field)
     {
         if (!field.IsBindable)
         {
             throw new BindingValidationException($"字段 {field.Path} 在第一阶段不可绑定。");
+        }
+
+        if (chartItem is not null)
+        {
+            if (!chartItem.IsBindable)
+            {
+                throw new BindingValidationException(
+                    $"图表 {chartItem.Title} 没有可写的数据系列缓存。");
+            }
+
+            if (field.Type != DataValueType.Array)
+            {
+                throw new BindingValidationException(
+                    $"图表只能绑定集合字段，{field.Path} 的类型是 {field.Type}。");
+            }
+
+            return;
+        }
+
+        if (mockItem is null)
+        {
+            throw new BindingValidationException("绑定目标不存在。");
         }
 
         bool isCompatible = mockItem.DataType switch

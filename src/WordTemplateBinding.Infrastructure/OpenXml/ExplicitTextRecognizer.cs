@@ -6,7 +6,7 @@ using WordTemplateBinding.Core.Options;
 namespace WordTemplateBinding.Infrastructure.OpenXml;
 
 /// <summary>
-/// 识别形如 <c>{{text:示例文字}}</c> 的显式文本模拟数据标记。
+/// 识别形如 <c>{{text:示例文字}}</c> 或 <c>{{示例文字}}</c> 的显式文本模拟数据标记。
 /// </summary>
 public sealed class ExplicitTextRecognizer : IMockDataRecognizer
 {

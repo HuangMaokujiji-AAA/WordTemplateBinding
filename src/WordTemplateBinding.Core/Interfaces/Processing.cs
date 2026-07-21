@@ -108,6 +108,14 @@ public interface ILocatorIdGenerator
     /// <param name="locator">结构化定位信息。</param>
     /// <returns>返回 Base64Url 编码的 SHA-256 标识。</returns>
     string Generate(string templateHash, TextLocator locator);
+
+    /// <summary>
+    /// 根据模板哈希和图表定位信息生成稳定标识。
+    /// </summary>
+    /// <param name="templateHash">模板内容哈希。</param>
+    /// <param name="locator">图表定位信息。</param>
+    /// <returns>返回 Base64Url 编码的 SHA-256 标识。</returns>
+    string Generate(string templateHash, ChartLocator locator);
 }
 
 /// <summary>

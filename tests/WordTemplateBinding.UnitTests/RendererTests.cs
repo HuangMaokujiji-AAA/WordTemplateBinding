@@ -209,6 +209,41 @@ public sealed class RendererTests
     }
 
     /// <summary>
+    /// 验证页脚绑定会修改具体 FooterPart，同时保持正文不变。
+    /// </summary>
+    [Fact]
+    public async Task RenderAsync_FooterValue_ReplacesFooterOnly()
+    {
+        byte[] bytes = OpenXmlTestDocumentFactory.CreateBodyAndFooterDocument(
+            "正文保持不变",
+            "页脚统计值 88.5 分");
+        TemplateScanResult scan = await _scanner.ScanAsync(bytes);
+        TemplateDocument template = TestServiceFactory.CreateTemplate(bytes, scan);
+        MockDataItem footerItem = Assert.Single(scan.MockItems);
+        TemplateBinding binding = CreateBinding(
+            template.Id,
+            footerItem,
+            "FooterValue",
+            DataValueType.Decimal);
+
+        RenderedReport report = await _renderer.RenderAsync(
+            template,
+            new[] { binding },
+            new Dictionary<string, object?> { [binding.DataPath] = 92.3m });
+
+        byte[] reportBytes = report.GetBytesCopy();
+        Assert.Equal("正文保持不变", OpenXmlTestDocumentFactory.ReadBodyText(reportBytes));
+        Assert.Contains(
+            "页脚统计值 92.3 分",
+            OpenXmlTestDocumentFactory.ReadFooterText(reportBytes),
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "88.5",
+            OpenXmlTestDocumentFactory.ReadFooterText(reportBytes),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// 验证字符串字段值会替换整个显式文字标记而不保留标记语法。
     /// </summary>
     [Fact]
@@ -232,6 +267,56 @@ public sealed class RendererTests
         Assert.Equal(
             "标题半年度报告结束",
             OpenXmlTestDocumentFactory.ReadBodyText(report.GetBytesCopy()));
+    }
+
+    /// <summary>
+    /// 验证集合字段会更新 Word 原生图表的分类和全部系列缓存。
+    /// </summary>
+    [Fact]
+    public async Task RenderAsync_ChartBinding_ReplacesCategoryAndSeriesCaches()
+    {
+        byte[] bytes = OpenXmlTestDocumentFactory.CreateChartDocument();
+        TemplateScanResult scan = await _scanner.ScanAsync(bytes);
+        TemplateDocument template = TestServiceFactory.CreateTemplate(bytes, scan);
+        ChartTemplateItem chart = Assert.Single(scan.Charts);
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        TemplateBinding binding = new()
+        {
+            TemplateId = template.Id,
+            TargetKind = BindingTargetKind.Chart,
+            LocatorId = chart.LocatorId,
+            DataPath = "ChartData.ScienceScores",
+            DataType = DataValueType.Array,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        IReadOnlyList<IReadOnlyDictionary<string, object?>> rows =
+            new IReadOnlyDictionary<string, object?>[]
+            {
+                new Dictionary<string, object?>
+                {
+                    ["Category"] = "三年级",
+                    ["你县"] = 560m,
+                    ["全省"] = 510m,
+                },
+                new Dictionary<string, object?>
+                {
+                    ["Category"] = "九年级",
+                    ["你县"] = 520m,
+                    ["全省"] = 500m,
+                },
+            };
+
+        RenderedReport report = await _renderer.RenderAsync(
+            template,
+            new[] { binding },
+            new Dictionary<string, object?> { [binding.DataPath] = rows });
+
+        (IReadOnlyList<string> categories, IReadOnlyList<IReadOnlyList<decimal>> seriesValues) =
+            OpenXmlTestDocumentFactory.ReadFirstChartData(report.GetBytesCopy());
+        Assert.Equal(new[] { "三年级", "九年级" }, categories);
+        Assert.Equal(new[] { 560m, 520m }, seriesValues[0]);
+        Assert.Equal(new[] { 510m, 500m }, seriesValues[1]);
     }
 
     /// <summary>

@@ -11,7 +11,7 @@ using WordTemplateBinding.Core.Options;
 namespace WordTemplateBinding.Infrastructure.OpenXml;
 
 /// <summary>
-/// 扫描主文档正文中受支持的模拟数据并生成结构化定位与预览。
+/// 扫描主文档正文和页脚中受支持的模拟数据并生成结构化定位与预览。
 /// </summary>
 public sealed class WordTemplateScanner : IWordTemplateScanner
 {
@@ -52,61 +52,53 @@ public sealed class WordTemplateScanner : IWordTemplateScanner
             using WordprocessingDocument document = WordprocessingDocument.Open(stream, false);
             ValidateDocument(document);
 
-            Body body = document.MainDocumentPart?.Document?.Body
+            MainDocumentPart mainPart = document.MainDocumentPart
+                ?? throw new InvalidTemplateFileException("DOCX 缺少主文档部件。");
+            Body body = mainPart.Document?.Body
                 ?? throw new InvalidTemplateFileException("DOCX 缺少主文档正文。");
-            IReadOnlyList<Paragraph> paragraphs = OpenXmlDocumentHelpers.GetMainDocumentParagraphs(body);
             string contentHash = Convert.ToHexString(SHA256.HashData(templateBytes.Span))
                 .ToLowerInvariant();
-            List<string> paragraphTexts = new(paragraphs.Count);
+            List<string> paragraphTexts = new();
             List<MockDataItem> mockItems = new();
 
-            for (int paragraphIndex = 0; paragraphIndex < paragraphs.Count; paragraphIndex++)
+            ScanPart(
+                OpenXmlDocumentHelpers.GetMainDocumentParagraphs(body),
+                DocumentPartKind.MainDocument,
+                OpenXmlDocumentHelpers.MainDocumentPartKey,
+                contentHash,
+                paragraphTexts,
+                mockItems,
+                cancellationToken);
+
+            foreach (FooterPart footerPart in mainPart.FooterParts
+                         .OrderBy(part => part.Uri.OriginalString, StringComparer.Ordinal))
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                ParagraphTextMap map = ParagraphTextMapBuilder.Build(paragraphs[paragraphIndex]);
-                paragraphTexts.Add(map.FullText);
-
-                List<RecognizedMockData> recognized = ResolveOverlaps(
-                    _recognizers.SelectMany(recognizer => recognizer.Recognize(map)));
-
-                for (int occurrenceIndex = 0; occurrenceIndex < recognized.Count; occurrenceIndex++)
+                if (footerPart.Footer is null)
                 {
-                    RecognizedMockData item = recognized[occurrenceIndex];
-                    TextLocator locator = new()
-                    {
-                        PartKind = DocumentPartKind.MainDocument,
-                        PartKey = OpenXmlDocumentHelpers.MainDocumentPartKey,
-                        ParagraphIndex = paragraphIndex,
-                        StartOffset = item.StartOffset,
-                        Length = item.Length,
-                        OccurrenceIndex = occurrenceIndex,
-                        OriginalValue = item.OriginalText,
-                        ContextHash = OpenXmlDocumentHelpers.ComputeContextHash(
-                            map.FullText,
-                            item.StartOffset,
-                            item.Length,
-                            _options.ContextLength),
-                    };
-
-                    mockItems.Add(new MockDataItem
-                    {
-                        LocatorId = _locatorIdGenerator.Generate(contentHash, locator),
-                        MockValue = item.Value,
-                        DataType = item.DataType,
-                        Locator = locator,
-                        ParagraphText = map.FullText,
-                        PreviewParagraphIndex = paragraphIndex,
-                        IsBound = false,
-                        BoundDataPath = null,
-                    });
+                    continue;
                 }
+
+                ScanPart(
+                    OpenXmlDocumentHelpers.GetTextParagraphs(footerPart.Footer),
+                    DocumentPartKind.Footer,
+                    footerPart.Uri.OriginalString,
+                    contentHash,
+                    paragraphTexts,
+                    mockItems,
+                    cancellationToken);
             }
+
+            IReadOnlyList<ChartTemplateItem> charts = OpenXmlChartReader.Read(
+                mainPart,
+                contentHash,
+                _locatorIdGenerator);
 
             IReadOnlyList<MockDataItem> readOnlyItems = mockItems.AsReadOnly();
             return Task.FromResult(new TemplateScanResult
             {
                 ContentHash = contentHash,
                 MockItems = readOnlyItems,
+                Charts = charts,
                 Preview = _previewBuilder.Build(paragraphTexts.AsReadOnly(), readOnlyItems),
             });
         }
@@ -129,6 +121,62 @@ public sealed class WordTemplateScanner : IWordTemplateScanner
         catch (IOException exception)
         {
             throw new InvalidTemplateFileException("读取 DOCX 文件失败。", exception);
+        }
+    }
+
+    /// <summary>
+    /// 扫描一个独立 Word 文档部件中的段落，并使用部件内段落索引生成定位。
+    /// </summary>
+    private void ScanPart(
+        IReadOnlyList<Paragraph> paragraphs,
+        DocumentPartKind partKind,
+        string partKey,
+        string contentHash,
+        ICollection<string> paragraphTexts,
+        ICollection<MockDataItem> mockItems,
+        CancellationToken cancellationToken)
+    {
+        for (int paragraphIndex = 0; paragraphIndex < paragraphs.Count; paragraphIndex++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ParagraphTextMap map = ParagraphTextMapBuilder.Build(paragraphs[paragraphIndex]);
+            int previewParagraphIndex = paragraphTexts.Count;
+            paragraphTexts.Add(map.FullText);
+
+            List<RecognizedMockData> recognized = ResolveOverlaps(
+                _recognizers.SelectMany(recognizer => recognizer.Recognize(map)));
+
+            for (int occurrenceIndex = 0; occurrenceIndex < recognized.Count; occurrenceIndex++)
+            {
+                RecognizedMockData item = recognized[occurrenceIndex];
+                TextLocator locator = new()
+                {
+                    PartKind = partKind,
+                    PartKey = partKey,
+                    ParagraphIndex = paragraphIndex,
+                    StartOffset = item.StartOffset,
+                    Length = item.Length,
+                    OccurrenceIndex = occurrenceIndex,
+                    OriginalValue = item.OriginalText,
+                    ContextHash = OpenXmlDocumentHelpers.ComputeContextHash(
+                        map.FullText,
+                        item.StartOffset,
+                        item.Length,
+                        _options.ContextLength),
+                };
+
+                mockItems.Add(new MockDataItem
+                {
+                    LocatorId = _locatorIdGenerator.Generate(contentHash, locator),
+                    MockValue = item.Value,
+                    DataType = item.DataType,
+                    Locator = locator,
+                    ParagraphText = map.FullText,
+                    PreviewParagraphIndex = previewParagraphIndex,
+                    IsBound = false,
+                    BoundDataPath = null,
+                });
+            }
         }
     }
 

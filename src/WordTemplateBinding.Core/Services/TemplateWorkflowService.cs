@@ -108,6 +108,7 @@ public sealed class TemplateWorkflowService
 
         HashSet<string> validLocatorIds = scanResult.MockItems
             .Select(item => item.LocatorId)
+            .Concat(scanResult.Charts.Select(item => item.LocatorId))
             .ToHashSet(StringComparer.Ordinal);
         IReadOnlyList<TemplateBinding> bindings =
             await _bindingStore.GetByTemplateAsync(templateId, cancellationToken);
@@ -165,7 +166,7 @@ public sealed class TemplateWorkflowService
     /// <param name="scanResult">模板扫描结果。</param>
     private static void EnsureMockItemsExist(TemplateScanResult scanResult)
     {
-        if (scanResult.MockItems.Count == 0)
+        if (scanResult.MockItems.Count == 0 && scanResult.Charts.Count == 0)
         {
             throw new NoMockDataFoundException();
         }

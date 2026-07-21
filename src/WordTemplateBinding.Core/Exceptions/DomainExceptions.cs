@@ -81,7 +81,7 @@ public sealed class NoMockDataFoundException : WordTemplateBindingException
     /// 初始化未识别到模拟数据异常。
     /// </summary>
     public NoMockDataFoundException()
-        : base("no_mock_data_found", "模板中没有识别到小数、整数或显式文字模拟数据。")
+        : base("no_mock_data_found", "模板中没有识别到可绑定的文本模拟数据或 Word 原生图表。")
     {
     }
 }
@@ -96,7 +96,7 @@ public sealed class LocatorNotFoundException : WordTemplateBindingException
     /// </summary>
     /// <param name="locatorId">模拟数据定位标识。</param>
     public LocatorNotFoundException(string locatorId)
-        : base("locator_not_found", $"找不到模拟数据定位标识：{locatorId}。")
+        : base("locator_not_found", $"找不到模板绑定目标定位标识：{locatorId}。")
     {
     }
 }

@@ -175,6 +175,9 @@ export async function processDocx(
 
     // Build the chart model map (marker text → WordChartModel)
     const chartModelMap = new Map<string, WordChartModel>();
+    const chartLocationMap = new Map(
+      locatedCharts.map((chart) => [chart.marker, chart])
+    );
 
     // Re-read the original zip for chart XML files
     const origZip = await JSZip.loadAsync(arrayBuffer);
@@ -254,7 +257,8 @@ export async function processDocx(
 
     const replacedSlots = replaceChartMarkers(
       options.documentContainer,
-      chartModelMap
+      chartModelMap,
+      chartLocationMap
     );
 
     // Render each chart

@@ -17,6 +17,7 @@ import {
   upsertBinding,
 } from "./api/client";
 import type {
+  ChartItem,
   DataFieldNode,
   DataSchemaResponse,
   MockItem,
@@ -38,6 +39,11 @@ import {
   focusBindingTarget,
   refreshBindingTargetStates,
 } from "./features/binding/renderedDocumentBindings";
+import {
+  decorateRenderedCharts,
+  focusChartTarget,
+  refreshChartBindingTargetStates,
+} from "./features/binding/renderedChartBindings";
 
 type WorkspaceTab = "schema" | "bindings" | "properties";
 
@@ -57,7 +63,9 @@ const loading = ref(false);
 const loadingMessage = ref("");
 const documentVisible = ref(false);
 const renderedLocatorCount = ref(0);
+const renderedChartCount = ref(0);
 const unresolvedLocatorIds = ref<string[]>([]);
+const unresolvedChartIds = ref<string[]>([]);
 const docxViewerRef = ref<InstanceType<typeof DocxViewer> | null>(null);
 
 const chartStats = ref(createEmptyChartStats());
@@ -67,8 +75,23 @@ const selectedItem = computed(
       (item) => item.locatorId === selectedLocatorId.value
     ) || null
 );
+const selectedChart = computed(
+  () =>
+    template.value?.charts.find(
+      (chart) => chart.locatorId === selectedLocatorId.value
+    ) || null
+);
 const boundItems = computed(
   () => template.value?.mockItems.filter((item) => item.isBound) || []
+);
+const boundCharts = computed(
+  () => template.value?.charts.filter((chart) => chart.isBound) || []
+);
+const footerMockCount = computed(
+  () =>
+    template.value?.mockItems.filter(
+      (item) => item.locator.partKind === "Footer"
+    ).length || 0
 );
 const schemaSummary = computed(() => {
   if (!schema.value) return "正在加载字段树…";
@@ -186,12 +209,25 @@ async function handleFileSelected(file: File): Promise<void> {
     );
     renderedLocatorCount.value = decoration.renderedCount;
     unresolvedLocatorIds.value = decoration.unresolvedLocatorIds;
+    const chartDecoration = decorateRenderedCharts(
+      containers.documentContainer,
+      template.value.charts,
+      {
+        onSelect: selectChart,
+        onBind: (locatorId, field) => void bindField(locatorId, field),
+        onError: (message) => setStatus(message, true),
+      }
+    );
+    renderedChartCount.value = chartDecoration.renderedCount;
+    unresolvedChartIds.value = chartDecoration.unresolvedLocatorIds;
 
-    const unresolvedNote = decoration.unresolvedLocatorIds.length
-      ? `，${decoration.unresolvedLocatorIds.length} 项需从左侧列表选择`
+    const unresolvedCount = decoration.unresolvedLocatorIds.length
+      + chartDecoration.unresolvedLocatorIds.length;
+    const unresolvedNote = unresolvedCount
+      ? `，${unresolvedCount} 项需从左侧列表选择`
       : "";
     setStatus(
-      `已识别 ${template.value.mockItemCount} 个模拟值，网页已定位 ${decoration.renderedCount} 项${unresolvedNote}`
+      `已识别 ${template.value.mockItemCount} 个模拟值和 ${template.value.chartCount} 个图表，网页已定位 ${decoration.renderedCount + chartDecoration.renderedCount} 项${unresolvedNote}`
     );
   } catch (error) {
     if (taskId === renderTaskId) {
@@ -249,6 +285,22 @@ async function bindField(
 ): Promise<void> {
   if (!template.value || !field.isBindable) return;
 
+  const targetChart = template.value.charts.find(
+    (chart) => chart.locatorId === locatorId
+  );
+  if (targetChart && !targetChart.isBindable) {
+    setStatus("该图表没有可写的数据系列缓存。", true);
+    return;
+  }
+  if (targetChart && field.type !== "Array") {
+    setStatus("图表只能绑定集合字段。", true);
+    return;
+  }
+  if (!targetChart && field.type === "Array") {
+    setStatus("集合字段只能绑定图表，不能绑定文本模拟值。", true);
+    return;
+  }
+
   await runAction(`正在绑定 ${field.path}…`, async () => {
     await upsertBinding(template.value!.templateId, locatorId, field.path);
     template.value = await getTemplate(template.value!.templateId);
@@ -273,7 +325,7 @@ async function removeBinding(locatorId: string): Promise<void> {
 
 function handleFieldSelected(field: DataFieldNode): void {
   if (!selectedLocatorId.value) {
-    setStatus("请先点击文档中的黄色模拟值，或从左侧模拟值列表中选择一项。");
+    setStatus("请先点击文档中的模拟值或图表，或从左侧导航中选择一项。");
     return;
   }
   void bindField(selectedLocatorId.value, field);
@@ -284,11 +336,24 @@ function selectMockItem(item: MockItem): void {
   activeTab.value = "properties";
 }
 
+function selectChart(chart: ChartItem): void {
+  selectedLocatorId.value = chart.locatorId;
+  activeTab.value = "properties";
+}
+
 function focusMockItem(item: MockItem): void {
   selectMockItem(item);
   const container = getViewerContainers()?.documentContainer;
   if (!container || !focusBindingTarget(container, item.locatorId)) {
     setStatus("该值未能映射到网页预览，可继续在右侧选择字段完成绑定。");
+  }
+}
+
+function focusChart(chart: ChartItem): void {
+  selectChart(chart);
+  const container = getViewerContainers()?.documentContainer;
+  if (!container || !focusChartTarget(container, chart.locatorId)) {
+    setStatus("该图表未能映射到网页预览，可继续在右侧选择集合字段完成绑定。");
   }
 }
 
@@ -308,7 +373,9 @@ function resetTemplateState(): void {
   activeTab.value = "schema";
   chartStats.value = createEmptyChartStats();
   renderedLocatorCount.value = 0;
+  renderedChartCount.value = 0;
   unresolvedLocatorIds.value = [];
+  unresolvedChartIds.value = [];
 }
 
 function cleanupPreview(): void {
@@ -335,11 +402,12 @@ function refreshRenderedBindings(): void {
   const container = getViewerContainers()?.documentContainer;
   if (container && template.value) {
     refreshBindingTargetStates(container, template.value.mockItems);
+    refreshChartBindingTargetStates(container, template.value.charts);
   }
 }
 
 function syncSelection(): void {
-  if (!selectedItem.value) selectedLocatorId.value = null;
+  if (!selectedItem.value && !selectedChart.value) selectedLocatorId.value = null;
 }
 
 async function loadSchema(query: string): Promise<void> {
@@ -374,6 +442,10 @@ function setStatus(message: string, isError = false): void {
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+
+function partLabel(item: MockItem): string {
+  return item.locator.partKind === "Footer" ? "页脚" : "正文";
+}
 </script>
 
 <template>
@@ -398,8 +470,11 @@ function errorMessage(error: unknown): string {
           <h2>模板状态</h2>
           <dl class="metadata">
             <div><dt>模拟值</dt><dd>{{ template?.mockItemCount || 0 }}</dd></div>
+            <div><dt>原生图表</dt><dd>{{ template?.chartCount || 0 }}</dd></div>
             <div><dt>已绑定</dt><dd>{{ template?.bindingCount || 0 }}</dd></div>
             <div><dt>网页定位</dt><dd>{{ renderedLocatorCount }}</dd></div>
+            <div><dt>图表定位</dt><dd>{{ renderedChartCount }}</dd></div>
+            <div><dt>页脚模拟值</dt><dd>{{ footerMockCount }}</dd></div>
             <div>
               <dt>内容哈希</dt>
               <dd :title="template?.contentHash || ''">
@@ -407,6 +482,29 @@ function errorMessage(error: unknown): string {
               </dd>
             </div>
           </dl>
+        </section>
+
+        <section class="panel-section mock-list-section">
+          <h2>图表导航</h2>
+          <p v-if="!template" class="empty-state">上传模板后显示可绑定图表</p>
+          <p v-else-if="template.charts.length === 0" class="empty-state">未识别到 Word 原生图表</p>
+          <div v-else class="mock-list chart-target-list">
+            <button
+              v-for="chart in template.charts"
+              :key="chart.locatorId"
+              type="button"
+              class="mock-list-item chart-list-item"
+              :class="{
+                'is-bound': chart.isBound,
+                'is-selected': chart.locatorId === selectedLocatorId,
+                'is-unresolved': unresolvedChartIds.includes(chart.locatorId),
+              }"
+              @click="focusChart(chart)"
+            >
+              <strong>{{ chart.title }}</strong>
+              <span>{{ chart.boundDataPath || (chart.isBindable ? `${chart.chartType} · ${chart.series.length} 个系列` : `${chart.chartType} · 不可绑定`) }}</span>
+            </button>
+          </div>
         </section>
 
         <section class="panel-section mock-list-section">
@@ -420,13 +518,19 @@ function errorMessage(error: unknown): string {
               class="mock-list-item"
               :class="{
                 'is-bound': item.isBound,
+                'is-footer': item.locator.partKind === 'Footer',
                 'is-selected': item.locatorId === selectedLocatorId,
                 'is-unresolved': unresolvedLocatorIds.includes(item.locatorId),
               }"
               @click="focusMockItem(item)"
             >
-              <strong>{{ item.mockValue }}</strong>
-              <span>{{ item.boundDataPath || `段落 ${item.locator.paragraphIndex + 1}` }}</span>
+              <strong>
+                {{ item.mockValue }}
+                <em v-if="item.locator.partKind === 'Footer'">页脚</em>
+              </strong>
+              <span>
+                {{ item.boundDataPath || `${partLabel(item)} · 段落 ${item.locator.paragraphIndex + 1}` }}
+              </span>
             </button>
           </div>
         </section>
@@ -444,6 +548,11 @@ function errorMessage(error: unknown): string {
         <div class="preview-notice" :class="{ 'is-error': statusIsError }">
           <strong>{{ statusMessage }}</strong>
           <span>网页效果仅用于定位与绑定；批量赋值和最终文件生成均由后端 C# 处理。</span>
+          <span class="preview-legend">
+            <i class="legend-body"></i>正文模拟值
+            <i class="legend-footer"></i>页脚模拟值/区域
+            <i class="legend-chart"></i>可绑定图表
+          </span>
         </div>
         <DocxViewer ref="docxViewerRef" :visible="documentVisible" />
       </main>
@@ -458,7 +567,7 @@ function errorMessage(error: unknown): string {
             :class="{ active: activeTab === tab[0] }"
             @click="activeTab = tab[0]"
           >
-            {{ tab[0] === "bindings" ? `${tab[1]} ${boundItems.length}` : tab[1] }}
+            {{ tab[0] === "bindings" ? `${tab[1]} ${template?.bindingCount || 0}` : tab[1] }}
           </button>
         </div>
 
@@ -469,7 +578,7 @@ function errorMessage(error: unknown): string {
           </label>
           <p class="small-note">{{ schemaSummary }}</p>
           <p class="binding-hint">
-            先选中模拟值，再点击字段；也可以把字段直接拖到文档中的黄色高亮处。
+            标量字段绑定黄色/紫色文本；集合字段绑定橙色图表区域。也可以直接拖拽字段。
           </p>
           <div class="schema-tree">
             <SchemaTreeNode
@@ -482,14 +591,26 @@ function errorMessage(error: unknown): string {
         </section>
 
         <section v-else-if="activeTab === 'bindings'" class="tab-panel">
-          <p v-if="boundItems.length === 0" class="empty-state">尚无绑定关系</p>
+          <p v-if="boundItems.length === 0 && boundCharts.length === 0" class="empty-state">尚无绑定关系</p>
           <div v-else class="binding-list">
             <article v-for="item in boundItems" :key="item.locatorId" class="binding-card">
               <button type="button" class="binding-main" @click="focusMockItem(item)">
-                <strong>模拟值：{{ item.mockValue }}</strong>
+                <strong>
+                  模拟值：{{ item.mockValue }}
+                  <em v-if="item.locator.partKind === 'Footer'">页脚</em>
+                </strong>
                 <span>{{ item.boundDataPath }}</span>
               </button>
               <button type="button" class="binding-remove" @click="removeBinding(item.locatorId)">
+                取消绑定
+              </button>
+            </article>
+            <article v-for="chart in boundCharts" :key="chart.locatorId" class="binding-card chart-binding-card">
+              <button type="button" class="binding-main" @click="focusChart(chart)">
+                <strong>图表：{{ chart.title }} <em>图表</em></strong>
+                <span>{{ chart.boundDataPath }}</span>
+              </button>
+              <button type="button" class="binding-remove" @click="removeBinding(chart.locatorId)">
                 取消绑定
               </button>
             </article>
@@ -497,17 +618,29 @@ function errorMessage(error: unknown): string {
         </section>
 
         <section v-else class="tab-panel properties-panel">
-          <p v-if="!selectedItem" class="empty-state">
-            点击文档高亮或左侧模拟值查看属性
+          <p v-if="!selectedItem && !selectedChart" class="empty-state">
+            点击文档高亮、图表或左侧导航查看属性
           </p>
-          <dl v-else>
+          <dl v-else-if="selectedItem">
             <div><dt>原始值</dt><dd>{{ selectedItem.mockValue }}</dd></div>
             <div><dt>模拟数据类型</dt><dd>{{ selectedItem.dataType }}</dd></div>
+            <div><dt>文档位置</dt><dd>{{ partLabel(selectedItem) }}</dd></div>
+            <div><dt>文档部件</dt><dd>{{ selectedItem.locator.partKey }}</dd></div>
             <div><dt>段落索引</dt><dd>{{ selectedItem.locator.paragraphIndex }}</dd></div>
             <div><dt>起始偏移</dt><dd>{{ selectedItem.locator.startOffset }}</dd></div>
             <div><dt>已绑定字段</dt><dd>{{ selectedItem.boundDataPath || "未绑定" }}</dd></div>
             <div><dt>字段类型</dt><dd>{{ selectedItem.boundDataType || "—" }}</dd></div>
             <div><dt>LocatorId</dt><dd>{{ selectedItem.locatorId }}</dd></div>
+          </dl>
+          <dl v-else-if="selectedChart">
+            <div><dt>目标类型</dt><dd>Word 原生图表</dd></div>
+            <div><dt>图表标题</dt><dd>{{ selectedChart.title }}</dd></div>
+            <div><dt>图表类型</dt><dd>{{ selectedChart.chartType }}</dd></div>
+            <div><dt>分类数量</dt><dd>{{ selectedChart.categories.length }}</dd></div>
+            <div><dt>系列</dt><dd>{{ selectedChart.series.map(series => series.name).join('、') }}</dd></div>
+            <div><dt>文档部件</dt><dd>{{ selectedChart.locator.partKey }}</dd></div>
+            <div><dt>已绑定集合</dt><dd>{{ selectedChart.boundDataPath || "未绑定" }}</dd></div>
+            <div><dt>LocatorId</dt><dd>{{ selectedChart.locatorId }}</dd></div>
           </dl>
         </section>
       </aside>

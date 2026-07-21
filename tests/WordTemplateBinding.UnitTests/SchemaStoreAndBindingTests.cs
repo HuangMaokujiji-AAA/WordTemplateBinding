@@ -153,6 +153,38 @@ public sealed class SchemaStoreAndBindingTests
     }
 
     /// <summary>
+    /// 验证图表只能绑定可用的集合字段。
+    /// </summary>
+    [Fact]
+    public async Task BindingWorkflow_Chart_RequiresArrayField()
+    {
+        byte[] bytes = OpenXmlTestDocumentFactory.CreateChartDocument();
+        TemplateScanResult scan = await TestServiceFactory.CreateScanner().ScanAsync(bytes);
+        TemplateDocument template = TestServiceFactory.CreateTemplate(bytes, scan);
+        ITemplateStore templateStore = new InMemoryTemplateStore();
+        IBindingStore bindingStore = new InMemoryBindingStore();
+        await templateStore.SaveAsync(template);
+        BindingWorkflowService service = new(
+            templateStore,
+            bindingStore,
+            new InMemoryDataSchemaProvider(),
+            SystemClock.Instance);
+        ChartTemplateItem chart = Assert.Single(scan.Charts);
+
+        TemplateBinding binding = await service.UpsertAsync(
+            template.Id,
+            chart.LocatorId,
+            "ChartData.ScienceScores");
+
+        Assert.Equal(BindingTargetKind.Chart, binding.TargetKind);
+        Assert.Equal(DataValueType.Array, binding.DataType);
+        await Assert.ThrowsAsync<BindingValidationException>(() => service.UpsertAsync(
+            template.Id,
+            chart.LocatorId,
+            "StudentStatistics.AverageScore"));
+    }
+
+    /// <summary>
     /// 创建包含已保存模板的绑定业务服务。
     /// </summary>
     /// <returns>返回业务服务、模板和模拟数据项。</returns>

@@ -134,8 +134,28 @@ button:disabled {
   background: #f1fbf6;
 }
 
+.mock-list-item.is-footer {
+  border-left: 4px solid #7c3aed;
+  background: #f5f3ff;
+}
+
+.mock-list-item.is-footer.is-bound {
+  border-left-color: #7c3aed;
+  background: #ecfdf5;
+}
+
 .mock-list-item.is-unresolved {
   border-right: 3px solid #d97706;
+}
+
+.chart-list-item {
+  border-left: 4px solid #f59e0b;
+  background: #fffaf0;
+}
+
+.chart-list-item.is-bound {
+  border-left-color: #f59e0b;
+  background: #ecfdf5;
 }
 
 .mock-list-item strong,
@@ -144,6 +164,20 @@ button:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.mock-list-item em,
+.binding-main em {
+  display: inline-block;
+  margin-left: 5px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: #ede9fe;
+  color: #6d28d9;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 700;
+  vertical-align: 1px;
 }
 
 .mock-list-item span {
@@ -186,6 +220,44 @@ button:disabled {
 
 .preview-notice.is-error strong {
   color: var(--danger);
+}
+
+.preview-legend {
+  display: flex !important;
+  align-items: center;
+  gap: 5px;
+  margin-top: 5px;
+}
+
+.preview-legend i {
+  width: 14px;
+  height: 9px;
+  margin-left: 7px;
+  border: 1px solid;
+  border-radius: 2px;
+}
+
+.preview-legend i:first-child {
+  margin-left: 0;
+}
+
+.legend-body {
+  border-color: #e2b93b !important;
+  background: var(--warning-soft);
+}
+
+.legend-footer {
+  border-color: #8b5cf6 !important;
+  background: #ede9fe;
+}
+
+.legend-chart {
+  border-color: #f59e0b !important;
+  background: #fef3c7;
+}
+
+.chart-binding-card {
+  border-left: 4px solid #f59e0b;
 }
 
 .tabs {
@@ -400,6 +472,19 @@ button:disabled {
   color: #075f46;
 }
 
+.template-binding-target.is-footer {
+  border-color: #8b5cf6;
+  background: #ede9fe;
+  color: #5b21b6;
+}
+
+.template-binding-target.is-footer.is-bound {
+  border-color: #0f766e;
+  background: #ccfbf1;
+  color: #115e59;
+  box-shadow: inset 0 -2px #8b5cf6;
+}
+
 .template-binding-target.is-bound::after {
   content: " ✓";
   font-family: sans-serif;
@@ -409,6 +494,17 @@ button:disabled {
 .template-binding-target.is-drag-over {
   border-color: var(--primary);
   box-shadow: 0 0 0 3px rgb(49 87 213 / 24%);
+}
+
+.docx-viewer__document footer.template-footer-region {
+  margin-inline: -8px;
+  padding-inline: 8px;
+  border-top: 1px dashed #a78bfa;
+  background: rgb(237 233 254 / 58%);
+}
+
+.docx-viewer__document .template-footer-paragraph {
+  background: rgb(237 233 254 / 72%);
 }
 
 .visually-hidden {
@@ -428,4 +524,3 @@ button:disabled {
     grid-template-columns: 220px minmax(520px, 1fr) 320px;
   }
 }
-

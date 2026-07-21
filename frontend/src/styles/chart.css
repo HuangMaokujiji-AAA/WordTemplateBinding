@@ -15,6 +15,62 @@
   height: 100%;
 }
 
+.template-chart-target {
+  cursor: pointer;
+  border-radius: 8px;
+  outline: 3px solid rgb(245 158 11 / 72%);
+  outline-offset: 3px;
+  transition: outline-color 160ms ease, box-shadow 160ms ease;
+}
+
+.template-chart-target:hover,
+.template-chart-target:focus-visible,
+.template-chart-target.is-focused,
+.template-chart-target.is-drag-over {
+  outline-color: #d97706;
+  box-shadow: 0 0 0 7px rgb(245 158 11 / 18%);
+}
+
+.template-chart-target.is-bound {
+  outline-color: #16a34a;
+}
+
+.template-chart-target.is-disabled {
+  outline-color: #94a3b8;
+  cursor: default;
+}
+
+.template-chart-target.is-bound:hover,
+.template-chart-target.is-bound:focus-visible {
+  outline-color: #15803d;
+  box-shadow: 0 0 0 7px rgb(22 163 74 / 16%);
+}
+
+/* Keep the external Word caption and the ECharts replacement together. */
+.docx-chart-figure {
+  display: block;
+  max-width: 100%;
+  margin: 0;
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+.docx-chart-figure > .docx-chart-paragraph,
+.docx-chart-figure > .docx-chart-caption {
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+.docx-chart-figure > .docx-chart-paragraph {
+  break-after: avoid;
+  page-break-after: avoid;
+}
+
+.docx-chart-figure > .docx-chart-caption {
+  break-before: avoid;
+  page-break-before: avoid;
+}
+
 /* Unsupported chart placeholder */
 .docx-chart-unsupported {
   font-family: "Microsoft YaHei", "PingFang SC", sans-serif;

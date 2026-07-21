@@ -12,8 +12,10 @@ internal sealed record TemplateResponse(
     string FileName,
     string ContentHash,
     int MockItemCount,
+    int ChartCount,
     int BindingCount,
     IReadOnlyList<MockItemResponse> MockItems,
+    IReadOnlyList<ChartItemResponse> Charts,
     PreviewResponse Preview,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt);
@@ -44,6 +46,37 @@ internal sealed record TextLocatorResponse(
     int OccurrenceIndex,
     string OriginalValue,
     string ContextHash);
+
+/// <summary>
+/// 表示 API 返回的可绑定 Word 原生图表。
+/// </summary>
+internal sealed record ChartItemResponse(
+    string LocatorId,
+    ChartLocatorResponse Locator,
+    string ChartType,
+    string Title,
+    IReadOnlyList<string> Categories,
+    IReadOnlyList<ChartSeriesResponse> Series,
+    bool IsBindable,
+    bool IsBound,
+    string? BoundDataPath,
+    DataValueType? BoundDataType);
+
+/// <summary>
+/// 表示 API 返回的图表定位。
+/// </summary>
+internal sealed record ChartLocatorResponse(
+    string PartKey,
+    string RelationshipId,
+    int DocumentOrder);
+
+/// <summary>
+/// 表示 API 返回的图表系列摘要。
+/// </summary>
+internal sealed record ChartSeriesResponse(
+    int SeriesIndex,
+    string Name,
+    IReadOnlyList<decimal?> Values);
 
 /// <summary>
 /// 表示 API 返回的结构化预览。
@@ -90,6 +123,7 @@ internal sealed record DeleteBindingResponse(bool Success, bool Deleted);
 /// </summary>
 internal sealed record BindingResponse(
     Guid TemplateId,
+    BindingTargetKind TargetKind,
     string LocatorId,
     string DataPath,
     DataValueType DataType,
@@ -159,14 +193,42 @@ internal static class ApiContractMapper
             })
             .ToList()
             .AsReadOnly();
+        IReadOnlyList<ChartItemResponse> charts = template.ScanResult.Charts
+            .Select(item =>
+            {
+                bindingsByLocator.TryGetValue(item.LocatorId, out TemplateBinding? binding);
+                return new ChartItemResponse(
+                    item.LocatorId,
+                    new ChartLocatorResponse(
+                        item.Locator.PartKey,
+                        item.Locator.RelationshipId,
+                        item.Locator.DocumentOrder),
+                    item.ChartType,
+                    item.Title,
+                    item.Categories,
+                    item.Series.Select(series => new ChartSeriesResponse(
+                            series.SeriesIndex,
+                            series.Name,
+                            series.Values))
+                        .ToList()
+                        .AsReadOnly(),
+                    item.IsBindable,
+                    binding is not null,
+                    binding?.DataPath,
+                    binding?.DataType);
+            })
+            .ToList()
+            .AsReadOnly();
 
         return new TemplateResponse(
             template.Id,
             template.OriginalFileName,
             template.ContentHash,
             mockItems.Count,
+            charts.Count,
             bindings.Count,
             mockItems,
+            charts,
             ToResponse(template.ScanResult.Preview),
             template.CreatedAt,
             template.UpdatedAt);
@@ -180,6 +242,7 @@ internal static class ApiContractMapper
     internal static BindingResponse ToResponse(TemplateBinding binding) =>
         new(
             binding.TemplateId,
+            binding.TargetKind,
             binding.LocatorId,
             binding.DataPath,
             binding.DataType,

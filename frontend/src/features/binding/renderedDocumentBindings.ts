@@ -18,10 +18,24 @@ interface TextBoundary {
   offset: number;
 }
 
+interface LocatedTarget {
+  offset: number;
+  contextScore: number;
+}
+
+interface ParagraphMatch {
+  paragraph: HTMLElement;
+  index: number;
+  text: string;
+  score: number;
+  offsets: Map<string, number>;
+}
+
 /**
- * Maps the server's paragraph/character locators onto the docx-preview DOM.
- * Matching is deliberately based on paragraph text instead of renderer-specific
- * classes, so the backend remains the source of truth for replacement locators.
+ * Maps the server's part/paragraph/character locators onto the docx-preview DOM.
+ * Exact paragraph matching is preferred. A context-scored fallback tolerates
+ * renderer-only text such as footnote reference numbers without weakening the
+ * backend locator used for the final DOCX replacement.
  */
 export function decorateRenderedDocument(
   container: HTMLElement,
@@ -29,53 +43,69 @@ export function decorateRenderedDocument(
   handlers: BindingTargetHandlers
 ): DecorationResult {
   const paragraphs = Array.from(container.querySelectorAll<HTMLElement>("p"));
-  const byParagraph = new Map<number, MockItem[]>();
+  const groups = groupBySourceParagraph(mockItems);
+  const renderedLocatorIds = new Set<string>();
+  const unresolvedLocatorIds = new Set<string>();
+  let mainDocumentSearchStart = 0;
 
-  for (const item of mockItems) {
-    const group = byParagraph.get(item.locator.paragraphIndex) || [];
-    group.push(item);
-    byParagraph.set(item.locator.paragraphIndex, group);
-  }
+  for (const items of groups) {
+    const isFooter = items[0]?.locator.partKind === "Footer";
+    const matches = findParagraphMatches(
+      paragraphs,
+      items,
+      isFooter ? 0 : mainDocumentSearchStart,
+      isFooter
+    );
 
-  let renderedCount = 0;
-  let searchStart = 0;
-  const unresolvedLocatorIds: string[] = [];
-
-  for (const [, items] of [...byParagraph.entries()].sort(
-    ([left], [right]) => left - right
-  )) {
-    const expectedText = items[0]?.paragraphText || "";
-    const match = findParagraph(paragraphs, expectedText, searchStart);
-
-    if (!match) {
-      unresolvedLocatorIds.push(...items.map((item) => item.locatorId));
+    if (matches.length === 0) {
+      items.forEach((item) => unresolvedLocatorIds.add(item.locatorId));
       continue;
     }
 
-    searchStart = match.index + 1;
-    const sortedItems = [...items].sort(
-      (left, right) => right.locator.startOffset - left.locator.startOffset
-    );
+    const selectedMatches = isFooter
+      ? selectRepeatedFooterMatches(matches)
+      : [matches[0]];
+    if (!isFooter) {
+      mainDocumentSearchStart = selectedMatches[0].index + 1;
+    }
 
-    for (const item of sortedItems) {
-      const start = match.textOffset + item.locator.startOffset;
-      const inserted = insertBindingTarget(
-        match.paragraph,
-        start,
-        item.locator.length,
-        item,
-        handlers
-      );
+    for (const match of selectedMatches) {
+      if (isFooter) markFooterRegion(match.paragraph);
 
-      if (inserted) {
-        renderedCount += 1;
-      } else {
-        unresolvedLocatorIds.push(item.locatorId);
+      const targets = items
+        .map((item) => ({ item, offset: match.offsets.get(item.locatorId) }))
+        .filter(
+          (target): target is { item: MockItem; offset: number } =>
+            target.offset !== undefined
+        )
+        .sort((left, right) => right.offset - left.offset);
+
+      for (const target of targets) {
+        if (
+          insertBindingTarget(
+            match.paragraph,
+            target.offset,
+            target.item.locator.length,
+            target.item,
+            handlers
+          )
+        ) {
+          renderedLocatorIds.add(target.item.locatorId);
+        }
+      }
+    }
+
+    for (const item of items) {
+      if (!renderedLocatorIds.has(item.locatorId)) {
+        unresolvedLocatorIds.add(item.locatorId);
       }
     }
   }
 
-  return { renderedCount, unresolvedLocatorIds };
+  return {
+    renderedCount: renderedLocatorIds.size,
+    unresolvedLocatorIds: [...unresolvedLocatorIds],
+  };
 }
 
 export function refreshBindingTargetStates(
@@ -93,15 +123,18 @@ export function refreshBindingTargetStates(
     const item = locatorId ? itemsByLocator.get(locatorId) : undefined;
     if (!item) continue;
 
+    const isFooter = item.locator.partKind === "Footer";
+    element.classList.toggle("is-footer", isFooter);
     element.classList.toggle("is-bound", item.isBound);
+    element.dataset.partKind = item.locator.partKind;
     element.title = item.isBound
-      ? `已绑定：${item.boundDataPath}`
-      : "拖拽一个兼容字段到此处";
+      ? `${isFooter ? "页脚 · " : ""}已绑定：${item.boundDataPath}`
+      : `${isFooter ? "页脚 · " : ""}拖拽一个兼容字段到此处`;
     element.setAttribute(
       "aria-label",
       item.isBound
-        ? `模拟值 ${item.mockValue}，已绑定 ${item.boundDataPath}`
-        : `模拟值 ${item.mockValue}，未绑定`
+        ? `${isFooter ? "页脚" : "正文"}模拟值 ${item.mockValue}，已绑定 ${item.boundDataPath}`
+        : `${isFooter ? "页脚" : "正文"}模拟值 ${item.mockValue}，未绑定`
     );
   }
 }
@@ -122,32 +155,164 @@ export function focusBindingTarget(
   return true;
 }
 
-function findParagraph(
+function groupBySourceParagraph(mockItems: MockItem[]): MockItem[][] {
+  const groups = new Map<string, MockItem[]>();
+  for (const item of mockItems) {
+    const key = [
+      item.locator.partKind,
+      item.locator.partKey,
+      item.locator.paragraphIndex,
+    ].join("\u0000");
+    const group = groups.get(key) || [];
+    group.push(item);
+    groups.set(key, group);
+  }
+
+  return [...groups.values()].sort((left, right) => {
+    const leftFooter = left[0]?.locator.partKind === "Footer" ? 1 : 0;
+    const rightFooter = right[0]?.locator.partKind === "Footer" ? 1 : 0;
+    return (
+      leftFooter - rightFooter ||
+      left[0].previewParagraphIndex - right[0].previewParagraphIndex
+    );
+  });
+}
+
+function findParagraphMatches(
   paragraphs: HTMLElement[],
+  items: MockItem[],
+  searchStart: number,
+  isFooter: boolean
+): ParagraphMatch[] {
+  const expectedText = normalizeText(items[0]?.paragraphText || "");
+  const candidates = paragraphs
+    .map((paragraph, index) => ({ paragraph, index }))
+    .filter(({ paragraph, index }) => {
+      if (isFooter) return true;
+      return index >= searchStart && !isFooterParagraph(paragraph);
+    });
+
+  const matches: ParagraphMatch[] = [];
+  for (const candidate of candidates) {
+    const text = getBindableText(candidate.paragraph);
+    const exactParagraphOffset = text.indexOf(expectedText);
+    const offsets = new Map<string, number>();
+    let matchedItemCount = 0;
+    let contextScore = 0;
+
+    for (const item of items) {
+      const located =
+        exactParagraphOffset >= 0
+          ? {
+              offset: exactParagraphOffset + item.locator.startOffset,
+              contextScore: 100,
+            }
+          : locateTargetByContext(text, expectedText, item);
+      if (!located) continue;
+      offsets.set(item.locatorId, located.offset);
+      matchedItemCount += 1;
+      contextScore += located.contextScore;
+    }
+
+    if (matchedItemCount === 0) continue;
+    const footerPreference = isFooterParagraph(candidate.paragraph)
+      ? isFooter
+        ? 50_000
+        : -50_000
+      : 0;
+    matches.push({
+      ...candidate,
+      text,
+      offsets,
+      score:
+        footerPreference +
+        (exactParagraphOffset >= 0 ? 1_000_000 : 0) +
+        matchedItemCount * 10_000 +
+        contextScore,
+    });
+  }
+
+  return matches.sort(
+    (left, right) => right.score - left.score || left.index - right.index
+  );
+}
+
+function locateTargetByContext(
+  actualText: string,
   expectedText: string,
-  searchStart: number
-): { paragraph: HTMLElement; index: number; textOffset: number } | null {
-  const normalizedExpected = normalizeText(expectedText);
+  item: MockItem
+): LocatedTarget | null {
+  const targetText = normalizeText(item.locator.originalValue);
+  if (!targetText) return null;
 
-  for (let index = searchStart; index < paragraphs.length; index += 1) {
-    const paragraphText = getBindableText(paragraphs[index]);
-    const textOffset = paragraphText.indexOf(normalizedExpected);
-    if (textOffset >= 0) {
-      return { paragraph: paragraphs[index], index, textOffset };
+  const expectedStart = item.locator.startOffset;
+  const expectedEnd = expectedStart + item.locator.length;
+  const expectedPrefix = expectedText.slice(
+    Math.max(0, expectedStart - 48),
+    expectedStart
+  );
+  const expectedSuffix = expectedText.slice(expectedEnd, expectedEnd + 48);
+  let best: LocatedTarget | null = null;
+  let searchFrom = 0;
+
+  while (searchFrom <= actualText.length - targetText.length) {
+    const offset = actualText.indexOf(targetText, searchFrom);
+    if (offset < 0) break;
+
+    const actualPrefix = actualText.slice(Math.max(0, offset - 48), offset);
+    const actualSuffix = actualText.slice(
+      offset + targetText.length,
+      offset + targetText.length + 48
+    );
+    const contextScore =
+      commonSuffixLength(expectedPrefix, actualPrefix) +
+      commonPrefixLength(expectedSuffix, actualSuffix);
+    if (!best || contextScore > best.contextScore) {
+      best = { offset, contextScore };
     }
+    searchFrom = offset + Math.max(1, targetText.length);
   }
 
-  // Repeated headers or renderer-specific nodes can disturb sequence matching.
-  // A full-document fallback still requires an exact paragraph-text match.
-  for (let index = 0; index < searchStart; index += 1) {
-    const paragraphText = getBindableText(paragraphs[index]);
-    const textOffset = paragraphText.indexOf(normalizedExpected);
-    if (textOffset >= 0) {
-      return { paragraph: paragraphs[index], index, textOffset };
-    }
-  }
+  return best;
+}
 
-  return null;
+function commonPrefixLength(left: string, right: string): number {
+  const max = Math.min(left.length, right.length);
+  let length = 0;
+  while (length < max && left[length] === right[length]) length += 1;
+  return length;
+}
+
+function commonSuffixLength(left: string, right: string): number {
+  const max = Math.min(left.length, right.length);
+  let length = 0;
+  while (
+    length < max &&
+    left[left.length - length - 1] === right[right.length - length - 1]
+  ) {
+    length += 1;
+  }
+  return length;
+}
+
+function selectRepeatedFooterMatches(matches: ParagraphMatch[]): ParagraphMatch[] {
+  const semanticFooterMatches = matches.filter((match) =>
+    isFooterParagraph(match.paragraph)
+  );
+  const candidates = semanticFooterMatches.length > 0
+    ? semanticFooterMatches
+    : matches;
+  const bestScore = candidates[0].score;
+  return candidates.filter((match) => match.score === bestScore);
+}
+
+function isFooterParagraph(paragraph: HTMLElement): boolean {
+  return Boolean(paragraph.closest("footer"));
+}
+
+function markFooterRegion(paragraph: HTMLElement): void {
+  paragraph.classList.add("template-footer-paragraph");
+  paragraph.closest("footer")?.classList.add("template-footer-region");
 }
 
 function insertBindingTarget(
@@ -234,9 +399,7 @@ function getBindableTextNodes(paragraph: HTMLElement): Text[] {
 
   const nodes: Text[] = [];
   let node: Text | null;
-  while ((node = walker.nextNode() as Text | null)) {
-    nodes.push(node);
-  }
+  while ((node = walker.nextNode() as Text | null)) nodes.push(node);
   return nodes;
 }
 
@@ -269,4 +432,3 @@ function findBoundary(
 function normalizeText(value: string): string {
   return value.replace(/\u00a0/g, " ");
 }
-

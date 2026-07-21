@@ -1,4 +1,6 @@
 import type { WordChartModel } from "../chart-recognition/types";
+import type { LocatedChart } from "../ooxml/documentChartLocator";
+import { groupChartWithCaption } from "./groupChartWithCaption";
 
 /**
  * Walk the rendered DOM to find chart markers and replace them with
@@ -27,10 +29,15 @@ export interface ReplacedChartSlot {
 
 export function replaceChartMarkers(
   container: HTMLElement,
-  chartModels: Map<string, WordChartModel>
+  chartModels: Map<string, WordChartModel>,
+  chartLocations: Map<string, LocatedChart> = new Map()
 ): ReplacedChartSlot[] {
   const replaced: ReplacedChartSlot[] = [];
   const processedMarkers = new Set<string>();
+  const chartElements: Array<{
+    element: HTMLElement;
+    location?: LocatedChart;
+  }> = [];
 
   const walker = document.createTreeWalker(
     container,
@@ -84,6 +91,10 @@ export function replaceChartMarkers(
         slotSpan.setAttribute("data-chart-slot-id", slotId);
         slotSpan.setAttribute("role", "img");
         slotSpan.setAttribute("aria-label", "Word 图表");
+        const location = chartLocations.get(fullMatch);
+        if (location) {
+          slotSpan.dataset.chartPartKey = normalizePartKey(location.chartPath);
+        }
 
         // Apply dimensions
         if (model.widthPx) {
@@ -99,6 +110,10 @@ export function replaceChartMarkers(
         slotSpan.appendChild(canvasSpan);
 
         fragments.push(slotSpan);
+        chartElements.push({
+          element: slotSpan,
+          location,
+        });
 
         // Don't use div inside p — use span as the slot container
         replaced.push({
@@ -135,5 +150,14 @@ export function replaceChartMarkers(
     }
   }
 
+  for (const chart of chartElements) {
+    groupChartWithCaption(container, chart.element, chart.location?.caption);
+  }
+
   return replaced;
+}
+
+function normalizePartKey(path: string): string {
+  const normalized = path.replace(/\\/g, "/");
+  return normalized.startsWith("/") ? normalized : `/${normalized}`;
 }

@@ -1,5 +1,13 @@
 export type MockDataType = "Decimal" | "Integer" | "String";
 
+export type DocumentPartKind =
+  | "MainDocument"
+  | "Header"
+  | "Footer"
+  | "Footnote"
+  | "Endnote"
+  | "TextBox";
+
 export type DataValueType =
   | "String"
   | "Integer"
@@ -8,8 +16,10 @@ export type DataValueType =
   | "Date"
   | "Array";
 
+export type BindingTargetKind = "Text" | "Chart";
+
 export interface TextLocator {
-  partKind: string;
+  partKind: DocumentPartKind;
   partKey: string;
   paragraphIndex: number;
   startOffset: number;
@@ -26,6 +36,31 @@ export interface MockItem {
   locator: TextLocator;
   paragraphText: string;
   previewParagraphIndex: number;
+  isBound: boolean;
+  boundDataPath: string | null;
+  boundDataType: DataValueType | null;
+}
+
+export interface ChartLocator {
+  partKey: string;
+  relationshipId: string;
+  documentOrder: number;
+}
+
+export interface ChartSeriesItem {
+  seriesIndex: number;
+  name: string;
+  values: Array<number | null>;
+}
+
+export interface ChartItem {
+  locatorId: string;
+  locator: ChartLocator;
+  chartType: string;
+  title: string;
+  categories: string[];
+  series: ChartSeriesItem[];
+  isBindable: boolean;
   isBound: boolean;
   boundDataPath: string | null;
   boundDataType: DataValueType | null;
@@ -49,8 +84,10 @@ export interface TemplateResponse {
   fileName: string;
   contentHash: string;
   mockItemCount: number;
+  chartCount: number;
   bindingCount: number;
   mockItems: MockItem[];
+  charts: ChartItem[];
   preview: { paragraphs: PreviewParagraph[] };
   createdAt: string;
   updatedAt: string;
@@ -73,4 +110,3 @@ export interface DataSchemaResponse {
   isTruncated: boolean;
   nodes: DataFieldNode[];
 }
-

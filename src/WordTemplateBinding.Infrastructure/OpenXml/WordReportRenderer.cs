@@ -1,6 +1,7 @@
 using System.Globalization;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
+using WordTemplateBinding.Core.Enums;
 using WordTemplateBinding.Core.Exceptions;
 using WordTemplateBinding.Core.Interfaces;
 using WordTemplateBinding.Core.Models;
@@ -47,44 +48,86 @@ public sealed class WordReportRenderer : IWordReportRenderer
 
             using (WordprocessingDocument document = WordprocessingDocument.Open(stream, true))
             {
-                Body body = document.MainDocumentPart?.Document?.Body
-                    ?? throw new ReportRenderingException("模板缺少主文档正文。");
-                IReadOnlyList<Paragraph> paragraphs =
-                    OpenXmlDocumentHelpers.GetMainDocumentParagraphs(body);
+                MainDocumentPart mainPart = document.MainDocumentPart
+                    ?? throw new ReportRenderingException("模板缺少主文档部件。");
                 Dictionary<string, MockDataItem> mockItems = template.ScanResult.MockItems
                     .ToDictionary(item => item.LocatorId, StringComparer.Ordinal);
+                Dictionary<string, ChartTemplateItem> chartItems = template.ScanResult.Charts
+                    .ToDictionary(item => item.LocatorId, StringComparer.Ordinal);
                 List<ReplacementInstruction> replacements = BuildReplacementInstructions(
-                    bindings,
+                    bindings.Where(binding => binding.TargetKind == BindingTargetKind.Text).ToList(),
                     values,
                     mockItems);
 
-                foreach (IGrouping<int, ReplacementInstruction> group in replacements
-                             .GroupBy(item => item.MockItem.Locator.ParagraphIndex))
+                foreach (IGrouping<DocumentPartLocatorKey, ReplacementInstruction> partGroup
+                             in replacements.GroupBy(item => new DocumentPartLocatorKey(
+                                 item.MockItem.Locator.PartKind,
+                                 item.MockItem.Locator.PartKey)))
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    int paragraphIndex = group.Key;
-                    if (paragraphIndex < 0 || paragraphIndex >= paragraphs.Count)
+                    ReplacementInstruction firstPartReplacement = partGroup.First();
+                    DocumentPartContext partContext = ResolveDocumentPart(
+                        mainPart,
+                        partGroup.Key,
+                        firstPartReplacement.Binding.LocatorId);
+
+                    foreach (IGrouping<int, ReplacementInstruction> paragraphGroup
+                                 in partGroup.GroupBy(
+                                     item => item.MockItem.Locator.ParagraphIndex))
                     {
-                        throw new LocatorNotFoundException(group.First().Binding.LocatorId);
+                        cancellationToken.ThrowIfCancellationRequested();
+                        int paragraphIndex = paragraphGroup.Key;
+                        if (paragraphIndex < 0 || paragraphIndex >= partContext.Paragraphs.Count)
+                        {
+                            throw new LocatorNotFoundException(
+                                paragraphGroup.First().Binding.LocatorId);
+                        }
+
+                        ParagraphTextMap map = ParagraphTextMapBuilder.Build(
+                            partContext.Paragraphs[paragraphIndex]);
+                        List<ReplacementInstruction> paragraphReplacements = paragraphGroup
+                            .OrderBy(item => item.MockItem.Locator.StartOffset)
+                            .ToList();
+                        ValidateParagraphReplacements(map, paragraphReplacements);
+
+                        // 必须从后向前替换，避免后方文本长度变化破坏同段落前方定位。
+                        foreach (ReplacementInstruction replacement in paragraphReplacements
+                                     .OrderByDescending(
+                                         item => item.MockItem.Locator.StartOffset))
+                        {
+                            ReplaceMappedText(
+                                map,
+                                replacement.MockItem.Locator,
+                                replacement.FormattedValue);
+                        }
                     }
 
-                    ParagraphTextMap map = ParagraphTextMapBuilder.Build(paragraphs[paragraphIndex]);
-                    List<ReplacementInstruction> paragraphReplacements =
-                        group.OrderBy(item => item.MockItem.Locator.StartOffset).ToList();
-                    ValidateParagraphReplacements(map, paragraphReplacements);
-
-                    // 必须从后向前替换，避免后方文本长度变化破坏同段落前方定位。
-                    foreach (ReplacementInstruction replacement in paragraphReplacements
-                                 .OrderByDescending(item => item.MockItem.Locator.StartOffset))
-                    {
-                        ReplaceMappedText(
-                            map,
-                            replacement.MockItem.Locator,
-                            replacement.FormattedValue);
-                    }
+                    partContext.Save();
                 }
 
-                document.MainDocumentPart!.Document.Save();
+                foreach (TemplateBinding binding in bindings.Where(
+                             binding => binding.TargetKind == BindingTargetKind.Chart))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!chartItems.TryGetValue(binding.LocatorId, out ChartTemplateItem? chartItem))
+                    {
+                        throw new LocatorNotFoundException(binding.LocatorId);
+                    }
+
+                    if (!values.TryGetValue(binding.DataPath, out object? chartValue))
+                    {
+                        throw new MissingDataValueException(binding.DataPath);
+                    }
+
+                    try
+                    {
+                        OpenXmlChartWriter.Write(mainPart, chartItem, chartValue);
+                    }
+                    catch (Exception exception) when (
+                        exception is FormatException or InvalidCastException or OverflowException)
+                    {
+                        throw new DataValueConversionException(binding.DataPath, exception);
+                    }
+                }
             }
 
             return new RenderedReport(stream.ToArray(), BuildDownloadFileName(template.OriginalFileName));
@@ -167,7 +210,7 @@ public sealed class WordReportRenderer : IWordReportRenderer
         {
             TextLocator locator = replacement.MockItem.Locator;
             int endOffset = locator.StartOffset + locator.Length;
-            if (!OpenXmlDocumentHelpers.IsMainDocumentLocator(locator) ||
+            if (!OpenXmlDocumentHelpers.IsSupportedTextLocator(locator) ||
                 locator.StartOffset < 0 ||
                 locator.Length <= 0 ||
                 endOffset > map.FullText.Length)
@@ -194,6 +237,47 @@ public sealed class WordReportRenderer : IWordReportRenderer
 
             previousEnd = endOffset;
         }
+    }
+
+    /// <summary>
+    /// 根据结构化部件定位解析正文或具体页脚的段落集合和保存动作。
+    /// </summary>
+    private static DocumentPartContext ResolveDocumentPart(
+        MainDocumentPart mainPart,
+        DocumentPartLocatorKey key,
+        string locatorId)
+    {
+        if (key.PartKind == DocumentPartKind.MainDocument &&
+            string.Equals(
+                key.PartKey,
+                OpenXmlDocumentHelpers.MainDocumentPartKey,
+                StringComparison.Ordinal))
+        {
+            Body body = mainPart.Document?.Body
+                ?? throw new ReportRenderingException("模板缺少主文档正文。");
+            return new DocumentPartContext(
+                OpenXmlDocumentHelpers.GetMainDocumentParagraphs(body),
+                () => mainPart.Document.Save());
+        }
+
+        if (key.PartKind == DocumentPartKind.Footer)
+        {
+            FooterPart? footerPart = mainPart.FooterParts.FirstOrDefault(part =>
+                string.Equals(
+                    part.Uri.OriginalString,
+                    key.PartKey,
+                    StringComparison.Ordinal));
+            if (footerPart?.Footer is null)
+            {
+                throw new LocatorNotFoundException(locatorId);
+            }
+
+            return new DocumentPartContext(
+                OpenXmlDocumentHelpers.GetTextParagraphs(footerPart.Footer),
+                () => footerPart.Footer.Save());
+        }
+
+        throw new LocatorNotFoundException(locatorId);
     }
 
     /// <summary>
@@ -279,4 +363,18 @@ public sealed class WordReportRenderer : IWordReportRenderer
         TemplateBinding Binding,
         MockDataItem MockItem,
         string FormattedValue);
+
+    /// <summary>
+    /// 表示用于批量定位替换的文档部件键。
+    /// </summary>
+    private sealed record DocumentPartLocatorKey(
+        DocumentPartKind PartKind,
+        string PartKey);
+
+    /// <summary>
+    /// 表示一个已解析的可写文本部件。
+    /// </summary>
+    private sealed record DocumentPartContext(
+        IReadOnlyList<Paragraph> Paragraphs,
+        Action Save);
 }

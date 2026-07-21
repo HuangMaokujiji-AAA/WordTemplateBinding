@@ -29,8 +29,16 @@ export interface LocatedChart {
   /** Unique text marker injected into the document XML. */
   marker: string;
 
+  /** Caption paragraph associated through Word's keep-with-next semantics. */
+  caption?: LocatedChartCaption;
+
   /** The parent <w:r> element that contained the chart drawing. */
   parentRunIndex?: number;
+}
+
+export interface LocatedChartCaption {
+  position: "before" | "after";
+  text: string;
 }
 
 /**
@@ -118,6 +126,10 @@ export async function locateDocumentCharts(
 
     const slotId = `chart-${i + 1}-${rId}`;
     const marker = `[[DOCX_CHART_SLOT:${slotId}]]`;
+    const chartParagraph = findAncestor(chartEl, OOXML_NS.w, "p");
+    const caption = chartParagraph
+      ? locateChartCaption(chartParagraph)
+      : undefined;
 
     charts.push({
       slotId,
@@ -129,10 +141,114 @@ export async function locateDocumentCharts(
       widthPx,
       heightPx,
       marker,
+      caption,
     });
   }
 
   return charts;
+}
+
+/**
+ * Word commonly keeps a chart and its external title together with
+ * `<w:keepNext/>`. docx-preview parses that property but does not apply it
+ * while creating page sections, so retain the relationship for a DOM repair
+ * pass after rendering.
+ */
+function locateChartCaption(chartParagraph: Element): LocatedChartCaption | undefined {
+  if (hasKeepWithNext(chartParagraph)) {
+    const nextParagraph = findSiblingParagraph(chartParagraph, "next");
+    const text = nextParagraph ? getParagraphText(nextParagraph) : "";
+    if (text) {
+      return { position: "after", text };
+    }
+  }
+
+  const previousParagraph = findSiblingParagraph(chartParagraph, "previous");
+  if (previousParagraph && hasKeepWithNext(previousParagraph)) {
+    const text = getParagraphText(previousParagraph);
+    if (text) {
+      return { position: "before", text };
+    }
+  }
+
+  const nextParagraph = findSiblingParagraph(chartParagraph, "next");
+  if (nextParagraph && isLikelyCaption(nextParagraph)) {
+    return { position: "after", text: getParagraphText(nextParagraph) };
+  }
+
+  if (previousParagraph && isLikelyCaption(previousParagraph)) {
+    return { position: "before", text: getParagraphText(previousParagraph) };
+  }
+
+  return undefined;
+}
+
+function isLikelyCaption(paragraph: Element): boolean {
+  const text = getParagraphText(paragraph);
+  if (!text || text.length > 160) return false;
+
+  const paragraphProperties = Array.from(paragraph.children).find(
+    (child) => child.namespaceURI === OOXML_NS.w && child.localName === "pPr"
+  );
+  const alignment = paragraphProperties
+    ? Array.from(paragraphProperties.children).find(
+        (child) => child.namespaceURI === OOXML_NS.w && child.localName === "jc"
+      )
+    : undefined;
+  const alignmentValue = alignment?.getAttributeNS(OOXML_NS.w, "val")
+    ?? alignment?.getAttribute("w:val")
+    ?? alignment?.getAttribute("val");
+
+  return alignmentValue === "center"
+    || /^(?:图|表|figure|fig\.?|chart)\s*/i.test(text);
+}
+
+function hasKeepWithNext(paragraph: Element): boolean {
+  const paragraphProperties = Array.from(paragraph.children).find(
+    (child) => child.namespaceURI === OOXML_NS.w && child.localName === "pPr"
+  );
+  const keepNext = paragraphProperties
+    ? Array.from(paragraphProperties.children).find(
+        (child) => child.namespaceURI === OOXML_NS.w && child.localName === "keepNext"
+      )
+    : undefined;
+
+  if (!keepNext) return false;
+
+  const value = keepNext.getAttributeNS(OOXML_NS.w, "val")
+    ?? keepNext.getAttribute("w:val")
+    ?? keepNext.getAttribute("val");
+
+  return value == null || !["0", "false", "off"].includes(value.toLowerCase());
+}
+
+function findSiblingParagraph(
+  paragraph: Element,
+  direction: "previous" | "next"
+): Element | null {
+  let sibling = direction === "next"
+    ? paragraph.nextElementSibling
+    : paragraph.previousElementSibling;
+
+  while (sibling) {
+    if (sibling.namespaceURI !== OOXML_NS.w || sibling.localName !== "p") {
+      return null;
+    }
+    if (getParagraphText(sibling)) return sibling;
+    sibling = direction === "next"
+      ? sibling.nextElementSibling
+      : sibling.previousElementSibling;
+  }
+
+  return null;
+}
+
+function getParagraphText(paragraph: Element): string {
+  return Array.from(paragraph.getElementsByTagNameNS(OOXML_NS.w, "t"))
+    .map((node) => node.textContent ?? "")
+    .join("")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 /**

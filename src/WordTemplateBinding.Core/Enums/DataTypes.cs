@@ -56,3 +56,19 @@ public enum DataValueType
     /// </summary>
     Array = 6,
 }
+
+/// <summary>
+/// 表示模板绑定指向的目标类型。
+/// </summary>
+public enum BindingTargetKind
+{
+    /// <summary>
+    /// 正文或页脚中的文本模拟值。
+    /// </summary>
+    Text = 1,
+
+    /// <summary>
+    /// Word 原生图表部件。
+    /// </summary>
+    Chart = 2,
+}

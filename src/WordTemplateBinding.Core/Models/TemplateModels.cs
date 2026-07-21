@@ -64,6 +64,11 @@ public sealed record TemplateScanResult
     public required IReadOnlyList<MockDataItem> MockItems { get; init; }
 
     /// <summary>
+    /// 获取识别到的 Word 原生图表。
+    /// </summary>
+    public required IReadOnlyList<ChartTemplateItem> Charts { get; init; }
+
+    /// <summary>
     /// 获取结构化文本预览。
     /// </summary>
     public required DocumentPreview Preview { get; init; }
@@ -175,6 +180,11 @@ public sealed record TemplateBinding
     /// 获取所属模板标识。
     /// </summary>
     public required Guid TemplateId { get; init; }
+
+    /// <summary>
+    /// 获取绑定目标类型。
+    /// </summary>
+    public BindingTargetKind TargetKind { get; init; } = BindingTargetKind.Text;
 
     /// <summary>
     /// 获取模拟数据定位标识。

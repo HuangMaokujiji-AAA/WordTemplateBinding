@@ -32,7 +32,7 @@ public sealed class TemplateProcessingOptions
     /// </summary>
     [Required]
     public string MockTextPattern { get; set; } =
-        @"\{\{text:(?<value>[^{}\r\n]+)\}\}";
+        @"\{\{(?:text:(?<value>[^{}\r\n]+)|(?<value>[^{}:\r\n]+))\}\}";
 
     /// <summary>
     /// 获取或设置计算上下文哈希时在匹配值两侧保留的字符数。

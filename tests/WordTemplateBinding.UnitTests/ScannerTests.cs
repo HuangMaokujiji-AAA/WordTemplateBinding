@@ -193,6 +193,43 @@ public sealed class ScannerTests
     }
 
     /// <summary>
+    /// 验证截图中的紧邻中文整数和百分比小数均由现有正则完整识别。
+    /// </summary>
+    [Fact]
+    public async Task ScanAsync_ChineseTextAndPercentages_ReturnsAllNumbers()
+    {
+        byte[] bytes = OpenXmlTestDocumentFactory.CreateParagraphDocument(
+            "平均分为226，高于全省36分；比例分别为7.3%、19.2%、32.4%、47.3%。");
+
+        TemplateScanResult result = await _scanner.ScanAsync(bytes);
+
+        Assert.Equal(
+            new[] { "226", "36", "7.3", "19.2", "32.4", "47.3" },
+            result.MockItems.Select(item => item.MockValue));
+    }
+
+    /// <summary>
+    /// 验证默认页脚中的数字会被扫描并获得 FooterPart 定位。
+    /// </summary>
+    [Fact]
+    public async Task ScanAsync_NumberInsideFooter_ReturnsFooterItem()
+    {
+        byte[] bytes = OpenXmlTestDocumentFactory.CreateBodyAndFooterDocument(
+            "正文没有模拟值",
+            "页脚统计值 88.5 分");
+
+        TemplateScanResult result = await _scanner.ScanAsync(bytes);
+
+        MockDataItem item = Assert.Single(result.MockItems);
+        Assert.Equal("88.5", item.MockValue);
+        Assert.Equal(DocumentPartKind.Footer, item.Locator.PartKind);
+        Assert.StartsWith("/word/footer", item.Locator.PartKey, StringComparison.Ordinal);
+        Assert.EndsWith(".xml", item.Locator.PartKey, StringComparison.Ordinal);
+        Assert.Equal(0, item.Locator.ParagraphIndex);
+        Assert.Equal(1, item.PreviewParagraphIndex);
+    }
+
+    /// <summary>
     /// 验证显式文字标记以内部文字作为模拟值、以完整标记作为替换范围。
     /// </summary>
     [Fact]
@@ -206,6 +243,26 @@ public sealed class ScannerTests
         Assert.Equal(MockDataType.String, item.DataType);
         Assert.Equal("{{text:年度报告}}", item.Locator.OriginalValue);
         Assert.Equal("{{text:年度报告}}".Length, item.Locator.Length);
+    }
+
+    /// <summary>
+    /// 验证不带 text: 前缀的双花括号文字标记也会被识别。
+    /// </summary>
+    [Theory]
+    [InlineData("{{学习态度}}", "学习态度")]
+    [InlineData("{{维度}}", "维度")]
+    public async Task ScanAsync_PlainTextMarker_ReturnsStringItem(
+        string marker,
+        string expectedValue)
+    {
+        TemplateScanResult result = await _scanner.ScanAsync(
+            OpenXmlTestDocumentFactory.CreateParagraphDocument(marker));
+
+        MockDataItem item = Assert.Single(result.MockItems);
+        Assert.Equal(expectedValue, item.MockValue);
+        Assert.Equal(MockDataType.String, item.DataType);
+        Assert.Equal(marker, item.Locator.OriginalValue);
+        Assert.Equal(marker.Length, item.Locator.Length);
     }
 
     /// <summary>
@@ -245,6 +302,25 @@ public sealed class ScannerTests
         TemplateScanResult result = await _scanner.ScanAsync(
             OpenXmlTestDocumentFactory.CreateParagraphDocument("标题[[text:年度报告]]"));
 
+        Assert.Empty(result.MockItems);
+    }
+
+    /// <summary>
+    /// 验证 Word 原生图表会返回稳定部件定位、分类和系列缓存。
+    /// </summary>
+    [Fact]
+    public async Task ScanAsync_NativeChart_ReturnsBindableChartMetadata()
+    {
+        byte[] bytes = OpenXmlTestDocumentFactory.CreateChartDocument();
+
+        TemplateScanResult result = await _scanner.ScanAsync(bytes);
+
+        ChartTemplateItem chart = Assert.Single(result.Charts);
+        Assert.Equal("bar", chart.ChartType);
+        Assert.Equal(new[] { "四年级", "八年级" }, chart.Categories);
+        Assert.Equal(new[] { "你县", "全省" }, chart.Series.Select(series => series.Name));
+        Assert.StartsWith("/word/charts/chart", chart.Locator.PartKey, StringComparison.Ordinal);
+        Assert.True(chart.IsBindable);
         Assert.Empty(result.MockItems);
     }
 
