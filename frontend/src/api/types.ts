@@ -64,6 +64,243 @@ export interface ChartItem {
   isBound: boolean;
   boundDataPath: string | null;
   boundDataType: DataValueType | null;
+  analysis: ChartAnalysisSnapshot | null;
+  dataDefinition: ChartDataDefinition | null;
+  chartMapping: ChartBindingMappingResponse | null;
+}
+
+export interface ChartDataDefinition {
+  schemaVersion: string;
+  locatorId: string;
+  partKey: string;
+  relationshipId: string;
+  documentOrder: number;
+  chartType: string;
+  dataMode: string;
+  category: ChartCategoryDef;
+  series: ChartSeriesDef[];
+  currentData: ChartDataRowSnapshot[];
+  writeCapability: string;
+  diagnostics: ChartDiagnosticItem[];
+}
+
+export interface ChartCategoryDef {
+  name: string;
+  formula: string | null;
+  sheetName: string | null;
+  startCell: string | null;
+  endCell: string | null;
+  values: Array<string | null>;
+}
+
+export interface ChartSeriesDef {
+  seriesIndex: number;
+  seriesKey: string;
+  name: string;
+  nameFormula: string | null;
+  nameCell: string | null;
+  valueFormula: string | null;
+  valueStartCell: string | null;
+  valueEndCell: string | null;
+  values: Array<number | null>;
+  numberFormat: string | null;
+}
+
+export interface ChartBindingMappingResponse {
+  mode: string;
+  categoryField: string;
+  seriesMappings: ChartSeriesFieldMappingResponse[];
+}
+
+export interface ChartSeriesFieldMappingResponse {
+  seriesIndex: number;
+  seriesKey: string;
+  templateSeriesName: string;
+  valueField: string;
+  seriesNameField: string | null;
+}
+
+export interface ChartAnalysisSnapshot {
+  schemaVersion: string;
+  identity: ChartIdentitySnapshot;
+  source: ChartSourceSnapshot;
+  chart: ChartDefinitionSnapshot;
+  plotGroups: ChartPlotGroupSnapshot[];
+  axes: ChartAxisSnapshot[];
+  categories: ChartCategorySnapshot[];
+  series: ChartSeriesSnapshot[];
+  dataTable: ChartDataTableSnapshot;
+  bindingContract: ChartBindingContract;
+  diagnostics: ChartAnalysisDiagnostics;
+}
+
+export interface ChartIdentitySnapshot {
+  locatorId: string;
+  partKey: string;
+  relationshipId: string;
+  documentOrder: number;
+}
+
+export interface ChartSourceSnapshot {
+  chartPartPath: string;
+  chartRelationshipPartPath: string | null;
+  externalDataRelationshipId: string | null;
+  embeddedWorkbookPath: string | null;
+  embeddedWorkbookDetected: boolean;
+  formulas: ChartFormulaSnapshot[];
+  caches: ChartCacheSummary[];
+}
+
+export interface ChartFormulaSnapshot {
+  role: string;
+  seriesIndex: number | null;
+  formula: string;
+  sheetName: string | null;
+  rangeAddress: string | null;
+}
+
+export interface ChartCacheSummary {
+  location: string;
+  pointCount: number;
+  hasSparsePoints: boolean;
+}
+
+export interface ChartDefinitionSnapshot {
+  type: string;
+  typeLabel: string;
+  title: string | null;
+  supportedForBinding: boolean;
+  widthEmu: number;
+  heightEmu: number;
+}
+
+export interface ChartPlotGroupSnapshot {
+  id: string;
+  order: number;
+  type: string;
+  grouping: string | null;
+  barDirection: string | null;
+  seriesKeys: string[];
+  axisIds: string[];
+}
+
+export interface ChartAxisSnapshot {
+  id: string;
+  type: string;
+  role: string;
+  position: string | null;
+  title: string | null;
+  min: number | null;
+  max: number | null;
+  majorUnit: number | null;
+  minorUnit: number | null;
+  numberFormat: string | null;
+  reversed: boolean;
+  visible: boolean;
+  crossAxisId: string | null;
+}
+
+export interface ChartCategorySnapshot {
+  index: number;
+  value: string | null;
+  displayValue: string;
+  levels: string[];
+  sourceFormula: string | null;
+  numberFormat: string | null;
+  isMissing: boolean;
+}
+
+export interface ChartSeriesSnapshot {
+  key: string;
+  seriesIndex: number;
+  order: number;
+  name: string;
+  chartType: string;
+  plotGroupId: string;
+  axisRole: string;
+  axisIds: string[];
+  nameFormula: string | null;
+  categoryFormula: string | null;
+  valueFormula: string | null;
+  xValueFormula: string | null;
+  yValueFormula: string | null;
+  bubbleSizeFormula: string | null;
+  values: ChartDataPointSnapshot[];
+  xValues: ChartDataPointSnapshot[];
+  yValues: ChartDataPointSnapshot[];
+  bubbleSizes: ChartDataPointSnapshot[];
+  numberFormat: string | null;
+  dataLabelFormula: string | null;
+}
+
+export interface ChartDataPointSnapshot {
+  index: number;
+  value: unknown;
+  displayValue: string | null;
+  numberFormat: string | null;
+  isMissing: boolean;
+}
+
+export interface ChartDataTableSnapshot {
+  orientation: string;
+  columns: ChartDataColumnSnapshot[];
+  rows: ChartDataRowSnapshot[];
+  rowCount: number;
+  columnCount: number;
+}
+
+export interface ChartDataColumnSnapshot {
+  key: string;
+  label: string;
+  role: string;
+  valueType: string;
+  seriesKey: string | null;
+}
+
+export interface ChartDataRowSnapshot {
+  index: number;
+  cells: Record<string, unknown>;
+  missing: Record<string, boolean>;
+}
+
+export interface ChartBindingContract {
+  mode: string;
+  categoryProperty: string;
+  seriesFields: ChartBindingSeriesField[];
+  sampleReplacementPayload: Record<string, unknown>[];
+  reportRequestExample: ChartReportRequestExample;
+}
+
+export interface ChartBindingSeriesField {
+  seriesKey: string;
+  seriesIndex: number;
+  originalName: string;
+  payloadProperty: string;
+  valueType: string;
+  required: boolean;
+}
+
+export interface ChartReportRequestExample {
+  templateId: string;
+  boundDataPath: string | null;
+  suggestedDataPath: string;
+  values: Record<string, unknown>;
+}
+
+export interface ChartAnalysisDiagnostics {
+  hasErrors: boolean;
+  hasWarnings: boolean;
+  completenessScore: number;
+  items: ChartDiagnosticItem[];
+}
+
+export interface ChartDiagnosticItem {
+  code: string;
+  level: string;
+  message: string;
+  path: string | null;
+  seriesIndex: number | null;
+  recoverable: boolean;
 }
 
 export interface PreviewHighlight {

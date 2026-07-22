@@ -117,7 +117,8 @@ public sealed class TemplateAutoBindingResolver : ITemplateAutoBindingResolver
                 chart.LocatorId,
                 field,
                 BindingTargetKind.Chart,
-                cancellationToken);
+                cancellationToken,
+                manifestBinding.ChartMapping);
             boundLocatorIds.Add(chart.LocatorId);
             chartBindingsRestored++;
         }
@@ -138,7 +139,8 @@ public sealed class TemplateAutoBindingResolver : ITemplateAutoBindingResolver
         string locatorId,
         DataFieldDefinition field,
         BindingTargetKind targetKind,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ChartBindingMapping? chartMapping = null)
     {
         DateTimeOffset now = _clock.UtcNow;
         await _bindingStore.UpsertAsync(new TemplateBinding
@@ -148,6 +150,7 @@ public sealed class TemplateAutoBindingResolver : ITemplateAutoBindingResolver
             LocatorId = locatorId,
             DataPath = field.Path,
             DataType = field.Type,
+            ChartMapping = chartMapping,
             CreatedAt = now,
             UpdatedAt = now,
         }, cancellationToken);

@@ -58,6 +58,9 @@ function makeBackend(partKey: string, relationshipId: string, documentOrder: num
     isBound: false,
     boundDataPath: null,
     boundDataType: null,
+    analysis: null,
+    dataDefinition: null,
+    chartMapping: null,
   };
 }
 

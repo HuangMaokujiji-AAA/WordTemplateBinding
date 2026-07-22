@@ -24,6 +24,9 @@ function createChart(overrides: Partial<ChartItem> = {}): ChartItem {
     isBound: false,
     boundDataPath: null,
     boundDataType: null,
+    analysis: null,
+    dataDefinition: null,
+    chartMapping: null,
     ...overrides,
   };
 }

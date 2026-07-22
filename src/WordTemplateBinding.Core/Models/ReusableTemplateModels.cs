@@ -24,6 +24,11 @@ public sealed record ReusableTemplateChartBinding
     /// 获取图表在主文档中的出现顺序。
     /// </summary>
     public required int DocumentOrder { get; init; }
+
+    /// <summary>
+    /// 获取图表字段映射配置。
+    /// </summary>
+    public ChartBindingMapping? ChartMapping { get; init; }
 }
 
 /// <summary>

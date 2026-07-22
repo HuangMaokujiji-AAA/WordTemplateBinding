@@ -48,6 +48,7 @@ app.MapTemplateEndpoints();
 app.MapBindingEndpoints();
 app.MapDataSchemaEndpoints();
 app.MapReportEndpoints();
+app.MapChartAnalysisEndpoints();
 app.Run();
 
 /// <summary>

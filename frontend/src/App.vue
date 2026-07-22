@@ -306,6 +306,55 @@ async function handleGenerate(): Promise<void> {
   });
 }
 
+async function handleTestReport(payload: Record<string, unknown>[]): Promise<void> {
+  if (!template.value) return;
+  const chartItem = selectedChartWorkspaceItem.value;
+  if (!chartItem?.isBound || !chartItem.boundDataPath) {
+    setStatus("请先将一个 Array 集合字段绑定到当前图表。", true);
+    return;
+  }
+
+  const values: Record<string, unknown> = {
+    [chartItem.boundDataPath]: payload,
+  };
+
+  await runAction("正在使用测试数据生成 DOCX 报告…", async () => {
+    const generatedName = await downloadReport(
+      template.value!.templateId,
+      values
+    );
+    setStatus(`测试报告已生成：${generatedName}`);
+  });
+}
+
+async function handleSaveMapping(mappingPayload: {
+  locatorId: string;
+  dataPath: string;
+  mapping: {
+    mode: string;
+    categoryField: string;
+    seriesMappings: Array<{
+      seriesIndex: number;
+      seriesKey: string;
+      valueField: string;
+      seriesNameField?: string | null;
+    }>;
+  };
+}): Promise<void> {
+  if (!template.value) return;
+
+  await runAction("正在保存图表字段映射…", async () => {
+    await upsertBinding(
+      template.value!.templateId,
+      mappingPayload.locatorId,
+      mappingPayload.dataPath,
+      mappingPayload.mapping
+    );
+    template.value = await getTemplate(template.value!.templateId);
+    setStatus("图表字段映射已保存。");
+  });
+}
+
 async function handleExportReusable(): Promise<void> {
   if (!template.value) return;
 
@@ -695,7 +744,11 @@ function partLabel(item: MockItem): string {
         </section>
 
         <section v-else-if="activeTab === 'chart-structure'" class="tab-panel">
-          <ChartStructurePanel :item="selectedChartWorkspaceItem" />
+          <ChartStructurePanel
+            :item="selectedChartWorkspaceItem"
+            @test-report="handleTestReport"
+            @save-mapping="handleSaveMapping"
+          />
         </section>
       </aside>
     </div>

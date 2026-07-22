@@ -6,6 +6,7 @@ using WordTemplateBinding.Core.Exceptions;
 using WordTemplateBinding.Core.Interfaces;
 using WordTemplateBinding.Core.Models;
 using WordTemplateBinding.Core.Options;
+using WordTemplateBinding.Infrastructure.OpenXml.Charts;
 
 namespace WordTemplateBinding.Infrastructure.OpenXml;
 
@@ -84,7 +85,34 @@ public sealed class WordReportRenderer : IWordReportRenderer
 
                     try
                     {
-                        OpenXmlChartWriter.Write(mainPart, chartItem, chartValue);
+                        if (binding.ChartMapping is not null && chartItem.DataDefinition is not null)
+                        {
+                            // New pipeline: resolve via mapping, then write to workbook + chart XML
+                            NormalizedChartData normData = ChartDataBindingResolver.Resolve(
+                                chartValue, binding.ChartMapping, chartItem.DataDefinition);
+
+                            // Write to embedded workbook first
+                            try
+                            {
+                                EmbeddedChartWorkbookWriter.Write(
+                                    mainPart.ChartParts.First(p =>
+                                        string.Equals(p.Uri.OriginalString, chartItem.Locator.PartKey, StringComparison.Ordinal)),
+                                    normData,
+                                    chartItem.DataDefinition);
+                            }
+                            catch (InvalidOperationException)
+                            {
+                                // No embedded workbook; that's OK, just write to cache
+                            }
+
+                            // Write to Chart XML caches + update formulas
+                            OpenXmlChartWriter.Write(mainPart, chartItem, normData, chartItem.DataDefinition);
+                        }
+                        else
+                        {
+                            // Legacy: use ChartDataSetParser for backward compatibility
+                            OpenXmlChartWriter.Write(mainPart, chartItem, chartValue);
+                        }
                     }
                     catch (Exception exception) when (
                         exception is FormatException or InvalidCastException or OverflowException)

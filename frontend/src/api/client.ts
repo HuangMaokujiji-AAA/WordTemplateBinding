@@ -69,12 +69,26 @@ export function getSchema(query = ""): Promise<DataSchemaResponse> {
 export function upsertBinding(
   templateId: string,
   locatorId: string,
-  dataPath: string
+  dataPath: string,
+  chartMapping?: {
+    mode: string;
+    categoryField: string;
+    seriesMappings: Array<{
+      seriesIndex: number;
+      seriesKey: string;
+      valueField: string;
+      seriesNameField?: string | null;
+    }>;
+  } | null
 ): Promise<{ success: boolean }> {
   return requestJson<{ success: boolean }>("/api/bindings", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ templateId, locatorId, dataPath }),
+    body: JSON.stringify(
+      chartMapping
+        ? { templateId, locatorId, dataPath, chartMapping }
+        : { templateId, locatorId, dataPath }
+    ),
   });
 }
 
@@ -88,17 +102,22 @@ export function deleteBinding(
   );
 }
 
-export async function downloadReport(templateId: string): Promise<string> {
+export async function downloadReport(
+  templateId: string,
+  values?: Record<string, unknown>
+): Promise<string> {
   return downloadDocx(
     "/api/reports/generate",
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ templateId }),
+      body: JSON.stringify(values ? { templateId, values } : { templateId }),
     },
     "report_generated.docx"
   );
 }
+
+export type { TemplateResponse };
 
 export async function downloadReusableTemplate(
   templateId: string

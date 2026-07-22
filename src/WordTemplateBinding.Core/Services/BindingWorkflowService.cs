@@ -41,12 +41,14 @@ public sealed class BindingWorkflowService
     /// <param name="locatorId">模拟数据定位标识。</param>
     /// <param name="dataPath">数据字段路径。</param>
     /// <param name="cancellationToken">取消令牌。</param>
+    /// <param name="chartMapping">可选的图表字段映射配置。</param>
     /// <returns>返回保存后的绑定。</returns>
     public async Task<TemplateBinding> UpsertAsync(
         Guid templateId,
         string locatorId,
         string dataPath,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        ChartBindingMapping? chartMapping = null)
     {
         TemplateDocument template = await _templateStore.GetAsync(templateId, cancellationToken)
             ?? throw new TemplateNotFoundException(templateId);
@@ -79,6 +81,12 @@ public sealed class BindingWorkflowService
             : BindingTargetKind.Chart;
         ValidateCompatibility(mockItem, chartItem, field, isReusablePathPlaceholder);
 
+        // Validate chart mapping
+        if (chartMapping is not null && chartItem?.DataDefinition is not null)
+        {
+            ValidateChartMapping(chartMapping, chartItem);
+        }
+
         IReadOnlyList<TemplateBinding> currentBindings =
             await _bindingStore.GetByTemplateAsync(templateId, cancellationToken);
         TemplateBinding? current = currentBindings.FirstOrDefault(
@@ -91,12 +99,43 @@ public sealed class BindingWorkflowService
             LocatorId = locatorId,
             DataPath = field.Path,
             DataType = field.Type,
+            ChartMapping = chartMapping,
             CreatedAt = current?.CreatedAt ?? now,
             UpdatedAt = now,
         };
 
         await _bindingStore.UpsertAsync(binding, cancellationToken);
         return binding;
+    }
+
+    private static void ValidateChartMapping(
+        ChartBindingMapping mapping,
+        ChartTemplateItem chartItem)
+    {
+        var def = chartItem.DataDefinition
+            ?? throw new BindingValidationException("图表没有数据定义，无法验证映射。");
+
+        if (!def.WriteCapability.Contains("workbook", StringComparison.OrdinalIgnoreCase) &&
+            !def.WriteCapability.Contains("cache", StringComparison.OrdinalIgnoreCase))
+            throw new BindingValidationException("该图表不支持数据写回，无法保存绑定。");
+
+        if (mapping.SeriesMappings.Count != def.Series.Count)
+            throw new BindingValidationException(
+                $"图表 \"{chartItem.Title}\" 需要 {def.Series.Count} 个系列字段映射，但只提供了 {mapping.SeriesMappings.Count} 个。");
+
+        var usedIndices = new HashSet<int>();
+        foreach (var sm in mapping.SeriesMappings)
+        {
+            if (sm.SeriesIndex < 0 || sm.SeriesIndex >= def.Series.Count)
+                throw new BindingValidationException(
+                    $"系列索引 {sm.SeriesIndex} 超出图表 \"{chartItem.Title}\" 的系列范围 0–{def.Series.Count - 1}。");
+            if (!usedIndices.Add(sm.SeriesIndex))
+                throw new BindingValidationException(
+                    $"系列索引 {sm.SeriesIndex} 被重复映射。");
+            if (string.IsNullOrWhiteSpace(sm.ValueField))
+                throw new BindingValidationException(
+                    $"图表 \"{chartItem.Title}\" 的系列 \"{def.Series[sm.SeriesIndex].Name}\" 尚未选择数据字段。");
+        }
     }
 
     /// <summary>

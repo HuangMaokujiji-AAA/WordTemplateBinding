@@ -93,4 +93,14 @@ public sealed record ChartTemplateItem
     /// 获取当前响应视图中绑定的集合字段路径。
     /// </summary>
     public string? BoundDataPath { get; init; }
+
+    /// <summary>
+    /// 获取后端深度图表分析快照；PartKey 解析失败时为 null。
+    /// </summary>
+    public ChartAnalysisSnapshot? Analysis { get; init; }
+
+    /// <summary>
+    /// 获取精简图表数据定义，用于绑定配置和写回。
+    /// </summary>
+    public ChartDataDefinition? DataDefinition { get; init; }
 }

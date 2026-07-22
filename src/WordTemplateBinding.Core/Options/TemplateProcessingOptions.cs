@@ -45,4 +45,22 @@ public sealed class TemplateProcessingOptions
     /// </summary>
     [Range(50, 5000)]
     public int RegexTimeoutMilliseconds { get; set; } = 250;
+
+    /// <summary>
+    /// 获取或设置单张图表最多分析的系列数量。
+    /// </summary>
+    [Range(1, 500)]
+    public int MaxChartSeries { get; set; } = 100;
+
+    /// <summary>
+    /// 获取或设置每系列最多分析的数据点数量。
+    /// </summary>
+    [Range(1, 100000)]
+    public int MaxChartPointsPerSeries { get; set; } = 20000;
+
+    /// <summary>
+    /// 获取或设置图表分析 JSON 的最大字节数（用于截断检测）。
+    /// </summary>
+    [Range(1024, 50_000_000)]
+    public int MaxChartAnalysisJsonBytes { get; set; } = 5_242_880;
 }

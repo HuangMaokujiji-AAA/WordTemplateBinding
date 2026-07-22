@@ -46,11 +46,30 @@ public static class BindingEndpoints
             throw new BindingValidationException("TemplateId、LocatorId 和 DataPath 均不能为空。");
         }
 
+        WordTemplateBinding.Core.Models.ChartBindingMapping? chartMapping = null;
+        if (request.ChartMapping is not null)
+        {
+            chartMapping = new WordTemplateBinding.Core.Models.ChartBindingMapping
+            {
+                Mode = request.ChartMapping.Mode,
+                CategoryField = request.ChartMapping.CategoryField,
+                SeriesMappings = request.ChartMapping.SeriesMappings.Select(sm =>
+                    new WordTemplateBinding.Core.Models.ChartSeriesFieldMapping
+                    {
+                        SeriesIndex = sm.SeriesIndex,
+                        SeriesKey = sm.SeriesKey,
+                        ValueField = sm.ValueField,
+                        SeriesNameField = sm.SeriesNameField,
+                    }).ToList().AsReadOnly(),
+            };
+        }
+
         TemplateBinding binding = await service.UpsertAsync(
             request.TemplateId,
             request.LocatorId.Trim(),
             request.DataPath.Trim(),
-            cancellationToken);
+            cancellationToken,
+            chartMapping);
         logger.CreateLogger("BindingUpsert").LogInformation(
             "模板绑定已保存，TemplateId={TemplateId}, LocatorId={LocatorId}, DataPath={DataPath}",
             binding.TemplateId,

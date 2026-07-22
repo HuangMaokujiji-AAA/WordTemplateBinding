@@ -70,7 +70,10 @@ internal sealed record ChartItemResponse(
     bool IsBindable,
     bool IsBound,
     string? BoundDataPath,
-    DataValueType? BoundDataType);
+    DataValueType? BoundDataType,
+    ChartAnalysisSnapshot? Analysis,
+    ChartDataDefinition? DataDefinition,
+    ChartBindingMappingResponse? ChartMapping);
 
 /// <summary>
 /// 表示 API 返回的图表定位。
@@ -116,7 +119,25 @@ internal sealed record PreviewHighlightResponse(
 internal sealed record UpsertBindingRequest(
     Guid TemplateId,
     string LocatorId,
-    string DataPath);
+    string DataPath,
+    ChartBindingMappingRequest? ChartMapping);
+
+/// <summary>
+/// 表示绑定请求中的图表字段映射。
+/// </summary>
+internal sealed record ChartBindingMappingRequest(
+    string Mode,
+    string CategoryField,
+    IReadOnlyList<ChartSeriesFieldMappingRequest> SeriesMappings);
+
+/// <summary>
+/// 表示绑定请求中的单个系列字段映射。
+/// </summary>
+internal sealed record ChartSeriesFieldMappingRequest(
+    int SeriesIndex,
+    string SeriesKey,
+    string ValueField,
+    string? SeriesNameField);
 
 /// <summary>
 /// 表示绑定接口响应。
@@ -138,7 +159,26 @@ internal sealed record BindingResponse(
     string DataPath,
     DataValueType DataType,
     DateTimeOffset CreatedAt,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt,
+    ChartBindingMappingResponse? ChartMapping);
+
+/// <summary>
+/// 表示 API 返回的图表字段映射。
+/// </summary>
+internal sealed record ChartBindingMappingResponse(
+    string Mode,
+    string CategoryField,
+    IReadOnlyList<ChartSeriesFieldMappingResponse> SeriesMappings);
+
+/// <summary>
+/// 表示 API 返回的单个系列字段映射。
+/// </summary>
+internal sealed record ChartSeriesFieldMappingResponse(
+    int SeriesIndex,
+    string SeriesKey,
+    string TemplateSeriesName,
+    string ValueField,
+    string? SeriesNameField);
 
 /// <summary>
 /// 表示字段树或字段搜索接口响应。
@@ -168,6 +208,15 @@ internal sealed record DataFieldNodeResponse(
 internal sealed record GenerateReportRequest(
     Guid TemplateId,
     Dictionary<string, JsonElement>? Values);
+
+/// <summary>
+/// 表示全部图表分析 JSON 响应。
+/// </summary>
+internal sealed record ChartsAnalysisResponse(
+    Guid TemplateId,
+    string FileName,
+    int ChartCount,
+    IReadOnlyList<ChartItemResponse> Charts);
 
 /// <summary>
 /// 提供领域模型到 API DTO 的集中映射。
@@ -225,7 +274,21 @@ internal static class ApiContractMapper
                     item.IsBindable,
                     binding is not null,
                     binding?.DataPath,
-                    binding?.DataType);
+                    binding?.DataType,
+                    item.Analysis,
+                    item.DataDefinition,
+                    binding?.ChartMapping is not null
+                        ? new ChartBindingMappingResponse(
+                            binding.ChartMapping.Mode,
+                            binding.ChartMapping.CategoryField,
+                            binding.ChartMapping.SeriesMappings.Select(sm =>
+                                new ChartSeriesFieldMappingResponse(
+                                    sm.SeriesIndex,
+                                    sm.SeriesKey,
+                                    sm.TemplateSeriesName,
+                                    sm.ValueField,
+                                    sm.SeriesNameField)).ToList().AsReadOnly())
+                        : null);
             })
             .ToList()
             .AsReadOnly();
@@ -262,7 +325,19 @@ internal static class ApiContractMapper
             binding.DataPath,
             binding.DataType,
             binding.CreatedAt,
-            binding.UpdatedAt);
+            binding.UpdatedAt,
+            binding.ChartMapping is not null
+                ? new ChartBindingMappingResponse(
+                    binding.ChartMapping.Mode,
+                    binding.ChartMapping.CategoryField,
+                    binding.ChartMapping.SeriesMappings.Select(sm =>
+                        new ChartSeriesFieldMappingResponse(
+                            sm.SeriesIndex,
+                            sm.SeriesKey,
+                            sm.TemplateSeriesName,
+                            sm.ValueField,
+                            sm.SeriesNameField)).ToList().AsReadOnly())
+                : null);
 
     /// <summary>
     /// 将数据字段树转换为 API 响应树。

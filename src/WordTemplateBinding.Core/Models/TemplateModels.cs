@@ -231,6 +231,11 @@ public sealed record TemplateBinding
     public required DataValueType DataType { get; init; }
 
     /// <summary>
+    /// 获取图表字段映射配置，仅当 TargetKind=Chart 时有效。
+    /// </summary>
+    public ChartBindingMapping? ChartMapping { get; init; }
+
+    /// <summary>
     /// 获取绑定创建时间。
     /// </summary>
     public required DateTimeOffset CreatedAt { get; init; }

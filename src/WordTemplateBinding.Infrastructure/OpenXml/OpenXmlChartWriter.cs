@@ -1,14 +1,14 @@
 using System.Globalization;
+using System.Text.RegularExpressions;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Drawing.Charts;
 using DocumentFormat.OpenXml.Packaging;
-using WordTemplateBinding.Core.Exceptions;
 using WordTemplateBinding.Core.Models;
 
 namespace WordTemplateBinding.Infrastructure.OpenXml;
 
 /// <summary>
-/// 将集合数据写入 Word ChartPart 的分类和系列缓存。
+/// 将标准化图表数据写入 Word ChartPart 的分类和系列缓存，并更新公式范围。
 /// </summary>
 internal static class OpenXmlChartWriter
 {
@@ -19,46 +19,54 @@ internal static class OpenXmlChartWriter
         "radarChart", "bubbleChart", "surfaceChart", "surface3DChart", "stockChart",
     };
 
+    /// <summary>
+    /// 使用 NormalizedChartData 写入图表（新接口：带公式更新）。
+    /// </summary>
     internal static void Write(
         MainDocumentPart mainPart,
         ChartTemplateItem chartItem,
-        object? value)
+        NormalizedChartData data,
+        ChartDataDefinition? definition)
     {
         ChartPart? chartPart = mainPart.ChartParts.FirstOrDefault(part =>
-            string.Equals(
-                part.Uri.OriginalString,
-                chartItem.Locator.PartKey,
-                StringComparison.Ordinal));
+            string.Equals(part.Uri.OriginalString, chartItem.Locator.PartKey, StringComparison.Ordinal));
         if (chartPart?.ChartSpace is null)
-        {
-            throw new LocatorNotFoundException(chartItem.LocatorId);
-        }
+            throw new InvalidOperationException($"找不到图表部件：{chartItem.LocatorId}");
 
-        ChartDataSet dataSet = ChartDataSetParser.Parse(value);
         IReadOnlyList<OpenXmlElement> seriesElements = FindSeries(chartPart.ChartSpace);
         if (seriesElements.Count == 0)
-        {
-            throw new ReportRenderingException($"图表 {chartItem.Title} 没有可写的数据系列。");
-        }
+            throw new InvalidOperationException($"图表 {chartItem.Title} 没有可写的数据系列。");
 
-        IReadOnlyList<ChartDataSeries> mappedSeries = MapSeries(
-            chartItem,
-            dataSet,
-            seriesElements.Count);
-        for (int index = 0; index < seriesElements.Count; index++)
+        int requiredCount = seriesElements.Count;
+        if (data.Series.Count < requiredCount)
+            throw new FormatException($"图表 {chartItem.Title} 需要 {requiredCount} 个系列，但标准化数据只提供了 {data.Series.Count} 个。");
+
+        for (int index = 0; index < requiredCount; index++)
         {
-            OpenXmlElement series = seriesElements[index];
-            ChartDataSeries source = mappedSeries[index];
-            UpdateSeriesName(series, source.Name);
-            UpdateCategories(series, dataSet.Categories);
+            OpenXmlElement seriesElement = seriesElements[index];
+            // Find matching normalized series
+            NormalizedChartSeries? source = data.Series.FirstOrDefault(s => s.SeriesIndex == index)
+                ?? data.Series[index];
+
+            UpdateSeriesName(seriesElement, source.Name);
+            UpdateCategories(seriesElement, data.Categories);
             UpdateNumbers(
-                FindChild(series, "val") ?? FindChild(series, "yVal"),
+                FindChild(seriesElement, "val") ?? FindChild(seriesElement, "yVal"),
                 source.Values,
                 chartItem.Title);
+
+            // Update formulas if definition available
+            if (definition is not null)
+            {
+                UpdateCategoryFormula(seriesElement, data.Categories.Count);
+                UpdateValueFormula(seriesElement, data.Categories.Count);
+                UpdateNameFormula(seriesElement);
+            }
         }
 
+        // Disable auto-update
         foreach (OpenXmlElement autoUpdate in Descendants(chartPart.ChartSpace)
-                     .Where(element => element.LocalName == "autoUpdate"))
+                     .Where(e => e.LocalName == "autoUpdate"))
         {
             autoUpdate.SetAttribute(new OpenXmlAttribute("val", string.Empty, "0"));
         }
@@ -66,73 +74,103 @@ internal static class OpenXmlChartWriter
         chartPart.ChartSpace.Save();
     }
 
-    private static IReadOnlyList<ChartDataSeries> MapSeries(
+    /// <summary>
+    /// 兼容旧接口：使用 ChartDataSet 格式。
+    /// </summary>
+    internal static void Write(
+        MainDocumentPart mainPart,
         ChartTemplateItem chartItem,
-        ChartDataSet dataSet,
-        int requiredCount)
+        object? value)
     {
-        List<ChartDataSeries> result = new(requiredCount);
-        HashSet<int> used = new();
-        for (int index = 0; index < requiredCount; index++)
+        ChartDataSet dataSet = ChartDataSetParser.Parse(value);
+        var normData = new NormalizedChartData
         {
-            string templateName = index < chartItem.Series.Count
-                ? chartItem.Series[index].Name
-                : string.Empty;
-            int matchedIndex = FindSeriesIndex(dataSet.Series, templateName, used);
-            if (matchedIndex < 0)
+            Categories = dataSet.Categories.Select(c => (string?)c).ToList().AsReadOnly(),
+            Series = dataSet.Series.Select((s, i) => new NormalizedChartSeries
             {
-                matchedIndex = Enumerable.Range(0, dataSet.Series.Count)
-                    .FirstOrDefault(candidate => !used.Contains(candidate), -1);
-            }
-
-            if (matchedIndex < 0)
-            {
-                throw new FormatException(
-                    $"集合只有 {dataSet.Series.Count} 个数值列，图表 {chartItem.Title} 需要 {requiredCount} 个系列。");
-            }
-
-            used.Add(matchedIndex);
-            result.Add(dataSet.Series[matchedIndex]);
-        }
-
-        return result.AsReadOnly();
+                SeriesIndex = i,
+                SeriesKey = $"series-{i}",
+                Name = s.Name,
+                Values = s.Values,
+            }).ToList().AsReadOnly(),
+        };
+        Write(mainPart, chartItem, normData, chartItem.DataDefinition);
     }
 
-    private static int FindSeriesIndex(
-        IReadOnlyList<ChartDataSeries> series,
-        string templateName,
-        IReadOnlySet<int> used)
+    private static void UpdateCategoryFormula(OpenXmlElement seriesElement, int newCount)
     {
-        for (int index = 0; index < series.Count; index++)
-        {
-            if (!used.Contains(index) && string.Equals(
-                    NormalizeName(series[index].Name),
-                    NormalizeName(templateName),
-                    StringComparison.OrdinalIgnoreCase))
-            {
-                return index;
-            }
-        }
-
-        return -1;
+        OpenXmlElement? container = FindChild(seriesElement, "cat") ?? FindChild(seriesElement, "xVal");
+        if (container is null) return;
+        UpdateFormulasInElement(container, newCount);
     }
 
-    private static string NormalizeName(string value) =>
-        string.Concat(value.Where(character => !char.IsWhiteSpace(character)));
+    private static void UpdateValueFormula(OpenXmlElement seriesElement, int newCount)
+    {
+        OpenXmlElement? container = FindChild(seriesElement, "val") ?? FindChild(seriesElement, "yVal");
+        if (container is null) return;
+        UpdateFormulasInElement(container, newCount);
+    }
+
+    private static void UpdateNameFormula(OpenXmlElement seriesElement)
+    {
+        // Name formulas are single-cell, no update needed
+    }
+
+    private static void UpdateFormulasInElement(OpenXmlElement container, int newCount)
+    {
+        foreach (OpenXmlElement child in container.ChildElements)
+        {
+            if (child.LocalName is "strRef" or "numRef" or "multiLvlStrRef")
+            {
+                OpenXmlElement? formulaEl = child.ChildElements.FirstOrDefault(e => e.LocalName == "f");
+                if (formulaEl is not null)
+                {
+                    string newFormula = UpdateFormulaRange(formulaEl.InnerText, newCount);
+                    formulaEl.Remove();
+                    child.InsertAt(new DocumentFormat.OpenXml.Drawing.Charts.Formula(newFormula), 0);
+                }
+            }
+        }
+    }
+
+    private static string UpdateFormulaRange(string formula, int newRowCount)
+    {
+        // Parse formula like "Sheet1!$A$2:$A$3" or "'Chart Data'!$B$2:$B$5"
+        int bang = formula.IndexOf('!');
+        if (bang < 0) return formula;
+        string prefix = formula[..(bang + 1)];
+        string range = formula[(bang + 1)..];
+
+        // Parse range
+        var parts = range.Split(':');
+        if (parts.Length != 2) return formula; // Single cell, leave unchanged
+
+        string startCell = parts[0].TrimStart('$');
+        string endCol = parts[1].Replace("$", "").TrimEnd('0', '1', '2', '3', '4', '5', '6', '7', '8', '9');
+
+        // Extract column from start
+        string startCol = new string(startCell.TakeWhile(c => !char.IsDigit(c)).ToArray());
+        string startRowStr = new string(startCell.SkipWhile(c => !char.IsDigit(c)).ToArray());
+
+        if (!int.TryParse(startRowStr, NumberStyles.Integer, CultureInfo.InvariantCulture, out int startRow))
+            return formula;
+
+        int newEndRow = startRow + newRowCount - 1;
+        string newRange = $"${startCol}${startRow}:${endCol}{newEndRow}";
+
+        return prefix + newRange;
+    }
 
     private static IReadOnlyList<OpenXmlElement> FindSeries(ChartSpace chartSpace)
     {
         OpenXmlElement? chart = Descendants(chartSpace)
-            .FirstOrDefault(element => element.LocalName == "chart");
+            .FirstOrDefault(e => e.LocalName == "chart");
         OpenXmlElement? plotArea = chart is null ? null : FindChild(chart, "plotArea");
-        if (plotArea is null)
-        {
-            return Array.Empty<OpenXmlElement>();
-        }
+        if (plotArea is null) return Array.Empty<OpenXmlElement>();
 
         return plotArea.ChildElements
-            .Where(element => ChartElementNames.Contains(element.LocalName))
-            .SelectMany(element => element.ChildElements.Where(child => child.LocalName == "ser"))
+            .Where(e => ChartElementNames.Contains(e.LocalName))
+            .SelectMany(e => e.ChildElements.Where(c => c.LocalName == "ser"))
             .ToList()
             .AsReadOnly();
     }
@@ -140,46 +178,154 @@ internal static class OpenXmlChartWriter
     private static void UpdateSeriesName(OpenXmlElement series, string name)
     {
         OpenXmlElement? text = FindChild(series, "tx");
-        StringCache? cache = text?.Descendants<StringCache>().FirstOrDefault();
-        StringLiteral? literal = text?.Descendants<StringLiteral>().FirstOrDefault();
-        if (cache is not null)
+        if (text is null) return;
+        UpdateStringCacheValue(text, name);
+    }
+
+    private static void UpdateStringCacheValue(OpenXmlElement container, string value)
+    {
+        foreach (OpenXmlElement child in container.ChildElements.Where(
+                     e => e.LocalName is "strRef" or "strLit"))
         {
-            ReplaceStringPoints(cache, new[] { name });
-        }
-        else if (literal is not null)
-        {
-            ReplaceStringPoints(literal, new[] { name });
+            OpenXmlElement? cache = child.ChildElements.FirstOrDefault(
+                e => e.LocalName is "strCache" or "strLit");
+            if (cache is null) continue;
+
+            // Remove old pt
+            foreach (OpenXmlElement pt in cache.ChildElements.Where(e => e.LocalName == "pt").ToList())
+                pt.Remove();
+
+            // Add new pt
+            OpenXmlElement? refBefore = cache.ChildElements.FirstOrDefault(e => e.LocalName == "extLst");
+            StringPoint newPt = new() { Index = 0U };
+            newPt.Append(new NumericValue(value));
+            if (refBefore is not null)
+                cache.InsertBefore(newPt, refBefore);
+            else
+                cache.Append(newPt);
+
+            // Update ptCount
+            OpenXmlElement? ptCount = cache.ChildElements.FirstOrDefault(e => e.LocalName == "ptCount");
+            if (ptCount is not null)
+                ptCount.SetAttribute(new OpenXmlAttribute("val", string.Empty, "1"));
         }
     }
 
-    private static void UpdateCategories(OpenXmlElement series, IReadOnlyList<string> categories)
+    private static void UpdateCategories(OpenXmlElement series, IReadOnlyList<string?> categories)
     {
         OpenXmlElement? container = FindChild(series, "cat") ?? FindChild(series, "xVal");
         if (container is null) return;
 
-        StringCache? cache = container.Descendants<StringCache>().FirstOrDefault();
-        StringLiteral? literal = container.Descendants<StringLiteral>().FirstOrDefault();
-        MultiLevelStringCache? multiLevelCache =
-            container.Descendants<MultiLevelStringCache>().FirstOrDefault();
-        if (cache is not null)
+        bool updated = false;
+        foreach (OpenXmlElement refEl in container.ChildElements.Where(
+                     e => e.LocalName is "strRef" or "strLit" or "multiLvlStrRef"))
         {
-            ReplaceStringPoints(cache, categories);
+            OpenXmlElement? cache = refEl.ChildElements.FirstOrDefault(
+                e => e.LocalName is "strCache" or "strLit");
+            if (cache is not null)
+            {
+                ReplaceCategoryCache(cache, categories);
+                updated = true;
+            }
+            else if (refEl.LocalName == "multiLvlStrRef")
+            {
+                OpenXmlElement? mlCache = refEl.ChildElements.FirstOrDefault(
+                    e => e.LocalName == "multiLvlStrCache");
+                if (mlCache is not null)
+                {
+                    ReplaceMultiLevelCache(mlCache, categories);
+                    updated = true;
+                }
+            }
         }
-        else if (literal is not null)
+        if (updated) return;
+
+        // Fallback: numRef
+        foreach (OpenXmlElement refEl in container.ChildElements.Where(
+                     e => e.LocalName is "numRef" or "numLit"))
         {
-            ReplaceStringPoints(literal, categories);
+            OpenXmlElement? cache = refEl.ChildElements.FirstOrDefault(
+                e => e.LocalName is "numCache" or "numLit");
+            if (cache is not null)
+            {
+                ReplaceNumericCategoryCache(cache, categories);
+            }
         }
-        else if (multiLevelCache is not null)
+    }
+
+    private static void ReplaceCategoryCache(OpenXmlElement cache, IReadOnlyList<string?> categories)
+    {
+        // Remove old
+        foreach (OpenXmlElement pt in cache.ChildElements.Where(e => e.LocalName == "pt").ToList())
+            pt.Remove();
+
+        // Update ptCount
+        OpenXmlElement? ptCount = cache.ChildElements.FirstOrDefault(e => e.LocalName == "ptCount");
+        if (ptCount is not null)
+            ptCount.SetAttribute(new OpenXmlAttribute("val", string.Empty, categories.Count.ToString(CultureInfo.InvariantCulture)));
+        else
         {
-            ReplaceMultiLevelPoints(multiLevelCache, categories);
+            ptCount = new PointCount { Val = (uint)categories.Count };
+            cache.InsertAt(ptCount, 0);
         }
-        else if (container.Descendants<NumberingCache>().FirstOrDefault() is NumberingCache numberCache)
+
+        // Add new points
+        OpenXmlElement? extLst = cache.ChildElements.FirstOrDefault(e => e.LocalName == "extLst");
+        for (int i = 0; i < categories.Count; i++)
         {
-            ReplaceNumericPoints(numberCache, categories.Select(ParseCategoryNumber).ToList());
+            StringPoint pt = new() { Index = (uint)i };
+            pt.Append(new NumericValue(categories[i] ?? string.Empty));
+            if (extLst is not null)
+                cache.InsertBefore(pt, extLst);
+            else
+                cache.Append(pt);
         }
-        else if (container.Descendants<NumberLiteral>().FirstOrDefault() is NumberLiteral numberLiteral)
+    }
+
+    private static void ReplaceMultiLevelCache(OpenXmlElement cache, IReadOnlyList<string?> categories)
+    {
+        // Remove old levels
+        foreach (OpenXmlElement lvl in cache.ChildElements.Where(e => e.LocalName == "lvl").ToList())
+            lvl.Remove();
+
+        // Update ptCount
+        OpenXmlElement? ptCount = cache.ChildElements.FirstOrDefault(e => e.LocalName == "ptCount");
+        if (ptCount is not null)
+            ptCount.SetAttribute(new OpenXmlAttribute("val", string.Empty, categories.Count.ToString(CultureInfo.InvariantCulture)));
+
+        Level level = new();
+        for (int i = 0; i < categories.Count; i++)
         {
-            ReplaceNumericPoints(numberLiteral, categories.Select(ParseCategoryNumber).ToList());
+            StringPoint pt = new() { Index = (uint)i };
+            pt.Append(new NumericValue(categories[i] ?? string.Empty));
+            level.Append(pt);
+        }
+        cache.Append(level);
+    }
+
+    private static void ReplaceNumericCategoryCache(OpenXmlElement cache, IReadOnlyList<string?> categories)
+    {
+        foreach (OpenXmlElement pt in cache.ChildElements.Where(e => e.LocalName == "pt").ToList())
+            pt.Remove();
+
+        OpenXmlElement? ptCount = cache.ChildElements.FirstOrDefault(e => e.LocalName == "ptCount");
+        if (ptCount is not null)
+            ptCount.SetAttribute(new OpenXmlAttribute("val", string.Empty, categories.Count.ToString(CultureInfo.InvariantCulture)));
+
+        OpenXmlElement? extLst = cache.ChildElements.FirstOrDefault(e => e.LocalName == "extLst");
+        for (int i = 0; i < categories.Count; i++)
+        {
+            decimal? num = null;
+            if (categories[i] is not null &&
+                decimal.TryParse(categories[i], NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed))
+                num = parsed;
+
+            NumericPoint pt = new() { Index = (uint)i };
+            pt.Append(new NumericValue(num?.ToString(CultureInfo.InvariantCulture) ?? string.Empty));
+            if (extLst is not null)
+                cache.InsertBefore(pt, extLst);
+            else
+                cache.Append(pt);
         }
     }
 
@@ -188,103 +334,46 @@ internal static class OpenXmlChartWriter
         IReadOnlyList<decimal?> values,
         string chartTitle)
     {
-        NumberingCache? cache = container?.Descendants<NumberingCache>().FirstOrDefault();
-        NumberLiteral? literal = container?.Descendants<NumberLiteral>().FirstOrDefault();
-        if (cache is not null)
+        if (container is null) return;
+
+        foreach (OpenXmlElement refEl in container.ChildElements.Where(
+                     e => e.LocalName is "numRef" or "numLit"))
         {
-            ReplaceNumericPoints(cache, values);
-            return;
+            OpenXmlElement? cache = refEl.ChildElements.FirstOrDefault(
+                e => e.LocalName is "numCache" or "numLit");
+            if (cache is not null)
+            {
+                ReplaceNumericCache(cache, values);
+                return;
+            }
         }
 
-        if (literal is not null)
-        {
-            ReplaceNumericPoints(literal, values);
-            return;
-        }
-
-        throw new ReportRenderingException($"图表 {chartTitle} 的系列没有可写数值缓存。");
+        throw new InvalidOperationException($"图表 {chartTitle} 的系列没有可写数值缓存。");
     }
 
-    private static void ReplaceStringPoints(
-        OpenXmlCompositeElement parent,
-        IReadOnlyList<string> values)
+    private static void ReplaceNumericCache(OpenXmlElement cache, IReadOnlyList<decimal?> values)
     {
-        parent.RemoveAllChildren<StringPoint>();
-        PointCount pointCount = EnsurePointCount(parent, values.Count);
-        OpenXmlElement? reference = parent.ChildElements
-            .FirstOrDefault(element => element.LocalName == "extLst");
-        foreach ((string value, int index) in values.Select((value, index) => (value, index)))
-        {
-            StringPoint point = new() { Index = (uint)index };
-            point.Append(new NumericValue(value));
-            parent.InsertBefore(point, reference);
-        }
-        pointCount.Val = (uint)values.Count;
-    }
+        foreach (OpenXmlElement pt in cache.ChildElements.Where(e => e.LocalName == "pt").ToList())
+            pt.Remove();
 
-    private static void ReplaceMultiLevelPoints(
-        MultiLevelStringCache cache,
-        IReadOnlyList<string> values)
-    {
-        cache.RemoveAllChildren<Level>();
-        PointCount pointCount = EnsurePointCount(cache, values.Count);
-        Level level = new();
-        foreach ((string value, int index) in values.Select((value, index) => (value, index)))
-        {
-            StringPoint point = new() { Index = (uint)index };
-            point.Append(new NumericValue(value));
-            level.Append(point);
-        }
-        cache.Append(level);
-        pointCount.Val = (uint)values.Count;
-    }
+        OpenXmlElement? ptCount = cache.ChildElements.FirstOrDefault(e => e.LocalName == "ptCount");
+        if (ptCount is not null)
+            ptCount.SetAttribute(new OpenXmlAttribute("val", string.Empty, values.Count.ToString(CultureInfo.InvariantCulture)));
 
-    private static void ReplaceNumericPoints(
-        OpenXmlCompositeElement parent,
-        IReadOnlyList<decimal?> values)
-    {
-        parent.RemoveAllChildren<NumericPoint>();
-        PointCount pointCount = EnsurePointCount(parent, values.Count);
-        OpenXmlElement? reference = parent.ChildElements
-            .FirstOrDefault(element => element.LocalName == "extLst");
-        foreach ((decimal? value, int index) in values.Select((value, index) => (value, index)))
+        OpenXmlElement? extLst = cache.ChildElements.FirstOrDefault(e => e.LocalName == "extLst");
+        for (int i = 0; i < values.Count; i++)
         {
-            NumericPoint point = new() { Index = (uint)index };
-            point.Append(new NumericValue(value?.ToString(CultureInfo.InvariantCulture) ?? string.Empty));
-            parent.InsertBefore(point, reference);
+            NumericPoint pt = new() { Index = (uint)i };
+            pt.Append(new NumericValue(values[i]?.ToString(CultureInfo.InvariantCulture) ?? string.Empty));
+            if (extLst is not null)
+                cache.InsertBefore(pt, extLst);
+            else
+                cache.Append(pt);
         }
-        pointCount.Val = (uint)values.Count;
-    }
-
-    private static PointCount EnsurePointCount(OpenXmlCompositeElement parent, int count)
-    {
-        PointCount? pointCount = parent.GetFirstChild<PointCount>();
-        if (pointCount is null)
-        {
-            pointCount = new PointCount { Val = (uint)count };
-            OpenXmlElement? firstPoint = parent.ChildElements
-                .FirstOrDefault(element => element.LocalName is "pt" or "lvl" or "extLst");
-            parent.InsertBefore(pointCount, firstPoint);
-        }
-        return pointCount;
-    }
-
-    private static decimal? ParseCategoryNumber(string value)
-    {
-        if (decimal.TryParse(
-                value,
-                NumberStyles.Float,
-                CultureInfo.InvariantCulture,
-                out decimal parsed))
-        {
-            return parsed;
-        }
-
-        throw new FormatException($"分类值“{value}”无法写入数值型横轴。");
     }
 
     private static OpenXmlElement? FindChild(OpenXmlElement element, string localName) =>
-        element.ChildElements.FirstOrDefault(child => child.LocalName == localName);
+        element.ChildElements.FirstOrDefault(e => e.LocalName == localName);
 
     private static IEnumerable<OpenXmlElement> Descendants(OpenXmlElement element)
     {
@@ -292,9 +381,7 @@ internal static class OpenXmlChartWriter
         {
             yield return child;
             foreach (OpenXmlElement descendant in Descendants(child))
-            {
                 yield return descendant;
-            }
         }
     }
 }

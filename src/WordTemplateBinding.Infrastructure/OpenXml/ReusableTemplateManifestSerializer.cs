@@ -67,12 +67,41 @@ internal static class ReusableTemplateManifestSerializer
                         continue;
                     }
 
+                    string? mode = chart.Attribute("mode")?.Value;
+                    string? categoryField = chart.Attribute("categoryField")?.Value;
+
+                    ChartBindingMapping? chartMapping = null;
+                    if (!string.IsNullOrWhiteSpace(mode) && !string.IsNullOrWhiteSpace(categoryField))
+                    {
+                        var seriesElements = chart.Elements(ManifestNamespace + "series").ToList();
+                        List<ChartSeriesFieldMapping> seriesMappings = new(seriesElements.Count);
+                        foreach (XElement seriesEl in seriesElements)
+                        {
+                            if (!int.TryParse(seriesEl.Attribute("index")?.Value, out int seriesIndex))
+                                continue;
+                            seriesMappings.Add(new ChartSeriesFieldMapping
+                            {
+                                SeriesIndex = seriesIndex,
+                                SeriesKey = seriesEl.Attribute("key")?.Value ?? $"series-{seriesIndex}",
+                                ValueField = seriesEl.Attribute("valueField")?.Value ?? string.Empty,
+                                SeriesNameField = seriesEl.Attribute("nameField")?.Value,
+                            });
+                        }
+                        chartMapping = new ChartBindingMapping
+                        {
+                            Mode = mode,
+                            CategoryField = categoryField,
+                            SeriesMappings = seriesMappings.AsReadOnly(),
+                        };
+                    }
+
                     chartBindings.Add(new ReusableTemplateChartBinding
                     {
                         DataPath = dataPath,
                         PartKey = partKey,
                         RelationshipId = relationshipId,
                         DocumentOrder = documentOrder,
+                        ChartMapping = chartMapping,
                     });
                 }
             }
@@ -133,13 +162,32 @@ internal static class ReusableTemplateManifestSerializer
             else if (binding.TargetKind == BindingTargetKind.Chart &&
                      chartItems.TryGetValue(binding.LocatorId, out ChartTemplateItem? chart))
             {
-                root.Add(new XElement(
+                XElement chartEl = new(
                     ManifestNamespace + "chart",
                     new XAttribute("dataPath", binding.DataPath),
                     new XAttribute("targetKind", "Chart"),
                     new XAttribute("chartPart", chart.Locator.PartKey),
                     new XAttribute("relationshipId", chart.Locator.RelationshipId),
-                    new XAttribute("documentOrder", chart.Locator.DocumentOrder)));
+                    new XAttribute("documentOrder", chart.Locator.DocumentOrder));
+
+                if (binding.ChartMapping is not null)
+                {
+                    chartEl.Add(new XAttribute("mode", binding.ChartMapping.Mode));
+                    chartEl.Add(new XAttribute("categoryField", binding.ChartMapping.CategoryField));
+                    foreach (var sm in binding.ChartMapping.SeriesMappings)
+                    {
+                        XElement seriesEl = new(
+                            ManifestNamespace + "series",
+                            new XAttribute("index", sm.SeriesIndex),
+                            new XAttribute("key", sm.SeriesKey),
+                            new XAttribute("valueField", sm.ValueField));
+                        if (sm.SeriesNameField is not null)
+                            seriesEl.Add(new XAttribute("nameField", sm.SeriesNameField));
+                        chartEl.Add(seriesEl);
+                    }
+                }
+
+                root.Add(chartEl);
             }
         }
 

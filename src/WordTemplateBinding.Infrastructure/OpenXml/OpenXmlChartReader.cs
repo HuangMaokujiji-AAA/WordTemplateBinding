@@ -5,6 +5,7 @@ using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using WordTemplateBinding.Core.Interfaces;
 using WordTemplateBinding.Core.Models;
+using WordTemplateBinding.Infrastructure.OpenXml.Charts;
 
 namespace WordTemplateBinding.Infrastructure.OpenXml;
 
@@ -72,6 +73,7 @@ internal static class OpenXmlChartReader
             };
             charts.Add(ReadChart(
                 chartPart.ChartSpace,
+                chartPart,
                 locator,
                 locatorIdGenerator.Generate(contentHash, locator),
                 charts.Count,
@@ -83,6 +85,7 @@ internal static class OpenXmlChartReader
 
     private static ChartTemplateItem ReadChart(
         ChartSpace chartSpace,
+        ChartPart chartPart,
         ChartLocator locator,
         string locatorId,
         int chartIndex,
@@ -126,7 +129,20 @@ internal static class OpenXmlChartReader
         string title = externalTitle ?? ReadChartTitle(chart) ?? $"图表 {chartIndex + 1}";
         bool isBindable = series.Count > 0 && series.All(item => item.Values.Count > 0);
 
-        return new ChartTemplateItem
+        // Build deep analysis snapshot (best-effort; partial failures do not block)
+        ChartAnalysisSnapshot? analysis = null;
+        try
+        {
+            analysis = OpenXmlWordChartAnalyzer.Analyze(
+                chartPart, locator, locatorId, externalTitle, chartIndex);
+        }
+        catch
+        {
+            // Analysis is best-effort; leave as null when ChartPart cannot be parsed
+        }
+
+        // Build slim data definition for binding
+        ChartTemplateItem tempItem = new()
         {
             LocatorId = locatorId,
             Locator = locator,
@@ -137,7 +153,19 @@ internal static class OpenXmlChartReader
             IsBindable = isBindable,
             IsBound = false,
             BoundDataPath = null,
+            Analysis = analysis,
         };
+        ChartDataDefinition? dataDef = null;
+        try
+        {
+            dataDef = OpenXmlChartDataReader.Read(chartPart, tempItem);
+        }
+        catch
+        {
+            // Best-effort
+        }
+
+        return tempItem with { DataDefinition = dataDef };
     }
 
     private static string ReadSeriesName(OpenXmlElement series, int seriesIndex)
