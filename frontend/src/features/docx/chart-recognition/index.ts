@@ -40,12 +40,6 @@ export { ScatterChartHandler } from "./detectors/scatterChartHandler";
 export { ComboChartHandler } from "./detectors/comboChartHandler";
 export { UnsupportedChartHandler } from "./detectors/unsupportedChartDetector";
 
-// Parsers (for testing)
-export { parseBarChart } from "./parsers/barChartParser";
-export { parseCategories } from "./parsers/chartCategoryParser";
-export { parseMultiLevelCategories } from "./parsers/multiLevelCategoryParser";
-export { parseChartLegend } from "./parsers/chartLegendParser";
-
 // Mappers
 export { wordBarChartToECharts } from "./mappers/wordBarChartToECharts";
 export { wordLineChartToECharts } from "./mappers/wordLineChartToECharts";

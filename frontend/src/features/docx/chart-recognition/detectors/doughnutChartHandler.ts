@@ -1,7 +1,7 @@
 import { OOXML_NS } from "../../ooxml/namespaces";
 import type { ChartTypeHandler, ChartParseContext } from "../chartDetector";
 import type { WordChartModel } from "../types";
-import { parseDoughnutChart } from "../parsers/doughnutChartParser";
+import { parseChartViaAnalyzer } from "./analyzerBridge";
 
 export const DoughnutChartHandler: ChartTypeHandler = {
   canHandle(chartXml: Document): boolean {
@@ -12,6 +12,6 @@ export const DoughnutChartHandler: ChartTypeHandler = {
   },
 
   parse(context: ChartParseContext): Promise<WordChartModel> {
-    return parseDoughnutChart(context);
+    return parseChartViaAnalyzer(context);
   },
 };

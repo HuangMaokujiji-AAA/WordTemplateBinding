@@ -4,13 +4,14 @@ import { ref } from "vue";
 const props = defineProps<{
   totalCharts: number;
   renderedCharts: number;
+  partiallyRenderedCharts: number;
   unsupportedCharts: number;
   failedCharts: number;
   charts: Array<{
     slotId: string;
     sourcePath: string;
     detectedType: string;
-    status: "rendered" | "unsupported" | "failed";
+    status: "rendered" | "partially-rendered" | "unsupported" | "failed";
     message?: string;
   }>;
 }>();
@@ -25,6 +26,8 @@ function statusLabel(status: string): string {
   switch (status) {
     case "rendered":
       return "已渲染";
+    case "partially-rendered":
+      return "部分渲染";
     case "unsupported":
       return "暂不支持";
     case "failed":
@@ -38,6 +41,8 @@ function statusClass(status: string): string {
   switch (status) {
     case "rendered":
       return "status--success";
+    case "partially-rendered":
+      return "status--warning";
     case "unsupported":
       return "status--warning";
     case "failed":
@@ -57,6 +62,12 @@ function statusClass(status: string): string {
         </span>
         <span class="parse-panel__stat parse-panel__stat--success">
           已渲染：<strong>{{ props.renderedCharts }}</strong>
+        </span>
+        <span
+          v-if="props.partiallyRenderedCharts > 0"
+          class="parse-panel__stat parse-panel__stat--warning"
+        >
+          部分渲染：<strong>{{ props.partiallyRenderedCharts }}</strong>
         </span>
         <span class="parse-panel__stat parse-panel__stat--warning">
           暂不支持：<strong>{{ props.unsupportedCharts }}</strong>

@@ -4,11 +4,10 @@ import { locateDocumentCharts } from "../features/docx/ooxml/documentChartLocato
 import { parseXmlString } from "../features/docx/ooxml/xmlUtils";
 import { findHandler, initChartRecognition } from "../features/docx/chart-recognition/index";
 import { detectBarChart } from "../features/docx/chart-recognition/detectors/barChartDetector";
-import { parseAllSeries } from "../features/docx/chart-recognition/parsers/chartSeriesParser";
-import { parseCategories } from "../features/docx/chart-recognition/parsers/chartCategoryParser";
-import { parseMultiLevelCategories } from "../features/docx/chart-recognition/parsers/multiLevelCategoryParser";
+import { parseCategoryContainer } from "../features/docx/chart-analysis/parsers/categoryAnalyzer";
 import { readFileSync } from "fs";
 import { resolve } from "path";
+import { OOXML_NS } from "../features/docx/ooxml/namespaces";
 
 /**
  * Integration test for the sample DOCX document.
@@ -136,21 +135,17 @@ describe("Sample Document Integration", () => {
     const chartXmlString = await chartFile!.async("text");
     const chartXml = parseXmlString(chartXmlString);
 
-    const plotArea = chartXml.getElementsByTagNameNS(
-      "http://schemas.openxmlformats.org/drawingml/2006/chart",
-      "plotArea"
-    )[0];
-    const barChart = plotArea.getElementsByTagNameNS(
-      "http://schemas.openxmlformats.org/drawingml/2006/chart",
-      "barChart"
-    )[0];
+    const plotArea = chartXml.getElementsByTagNameNS(OOXML_NS.c, "plotArea")[0];
+    const barChart = plotArea.getElementsByTagNameNS(OOXML_NS.c, "barChart")[0];
 
     // Parse series
-    const series = parseAllSeries(barChart);
-    expect(series.length).toBeGreaterThanOrEqual(2);
+    const serEls = Array.from(barChart.getElementsByTagNameNS(OOXML_NS.c, "ser"));
+    expect(serEls.length).toBeGreaterThanOrEqual(2);
 
     // Parse categories
-    const categories = parseCategories(barChart);
+    const firstSer = serEls[0];
+    const cat = firstSer.getElementsByTagNameNS(OOXML_NS.c, "cat")[0];
+    const categories = parseCategoryContainer(cat);
     expect(categories.map((c) => c.value)).toContain("四年级");
     expect(categories.map((c) => c.value)).toContain("八年级");
   });
@@ -167,16 +162,12 @@ describe("Sample Document Integration", () => {
     const chartXmlString = await chartFile!.async("text");
     const chartXml = parseXmlString(chartXmlString);
 
-    const plotArea = chartXml.getElementsByTagNameNS(
-      "http://schemas.openxmlformats.org/drawingml/2006/chart",
-      "plotArea"
-    )[0];
-    const barChart = plotArea.getElementsByTagNameNS(
-      "http://schemas.openxmlformats.org/drawingml/2006/chart",
-      "barChart"
-    )[0];
+    const plotArea = chartXml.getElementsByTagNameNS(OOXML_NS.c, "plotArea")[0];
+    const barChart = plotArea.getElementsByTagNameNS(OOXML_NS.c, "barChart")[0];
+    const firstSer = barChart.getElementsByTagNameNS(OOXML_NS.c, "ser")[0];
+    const cat = firstSer.getElementsByTagNameNS(OOXML_NS.c, "cat")[0];
 
-    const categories = parseCategories(barChart);
+    const categories = parseCategoryContainer(cat);
     const expectedDomains = ["识记", "理解", "应用", "分析", "评价", "创造"];
     const catValues = categories.map((c) => c.value);
 
@@ -197,19 +188,13 @@ describe("Sample Document Integration", () => {
     const chartXmlString = await chartFile!.async("text");
     const chartXml = parseXmlString(chartXmlString);
 
-    const plotArea = chartXml.getElementsByTagNameNS(
-      "http://schemas.openxmlformats.org/drawingml/2006/chart",
-      "plotArea"
-    )[0];
-    const barChart = plotArea.getElementsByTagNameNS(
-      "http://schemas.openxmlformats.org/drawingml/2006/chart",
-      "barChart"
-    )[0];
+    const plotArea = chartXml.getElementsByTagNameNS(OOXML_NS.c, "plotArea")[0];
+    const barChart = plotArea.getElementsByTagNameNS(OOXML_NS.c, "barChart")[0];
+    const firstSer = barChart.getElementsByTagNameNS(OOXML_NS.c, "ser")[0];
+    const cat = firstSer.getElementsByTagNameNS(OOXML_NS.c, "cat")[0];
 
-    const multiCategories = parseMultiLevelCategories(barChart);
-    expect(multiCategories).not.toBeNull();
-    if (multiCategories) {
-      expect(multiCategories.length).toBeGreaterThan(0);
-    }
+    const multiCategories = parseCategoryContainer(cat);
+    expect(multiCategories.length).toBeGreaterThan(0);
+    expect(multiCategories.some((c) => c.levels.length > 0)).toBe(true);
   });
 });

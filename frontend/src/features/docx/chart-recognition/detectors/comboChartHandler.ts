@@ -1,7 +1,7 @@
 import { OOXML_NS } from "../../ooxml/namespaces";
 import type { ChartTypeHandler, ChartParseContext } from "../chartDetector";
 import type { WordChartModel } from "../types";
-import { parseComboChart } from "../parsers/comboChartParser";
+import { parseChartViaAnalyzer } from "./analyzerBridge";
 import { isChartTypeElement } from "./lineChartHandler";
 
 export const ComboChartHandler: ChartTypeHandler = {
@@ -20,11 +20,11 @@ export const ComboChartHandler: ChartTypeHandler = {
     // Combo = at least 2 different chart type elements, none is 3D
     if (types.length < 2) return false;
 
-    // Currently only support simple bar+line combos (no 3D)
-    return types.every((t) => t === "barChart" || t === "lineChart");
+    // Currently only support simple bar+line(+area-as-line) combos (no 3D)
+    return types.every((t) => t === "barChart" || t === "lineChart" || t === "areaChart");
   },
 
   parse(context: ChartParseContext): Promise<WordChartModel> {
-    return parseComboChart(context);
+    return parseChartViaAnalyzer(context);
   },
 };

@@ -11,6 +11,20 @@ export interface ChartParseContext {
   zip: import("jszip");
   widthPx: number;
   heightPx: number;
+
+  /**
+   * Fields below are optional for backward compatibility with call sites
+   * that construct a ChartParseContext without going through processDocx's
+   * full LocatedChart (e.g. targeted unit/integration tests). When absent,
+   * handlers fall back to chartId/documentOrder 0/empty marker/null EMU —
+   * safe because these fields only affect chart-analysis identity/dimension
+   * metadata, never parsing correctness.
+   */
+  slotId?: string;
+  documentOrder?: number;
+  marker?: string;
+  widthEmu?: number | null;
+  heightEmu?: number | null;
 }
 
 export interface ChartDetectionResult {

@@ -27,10 +27,16 @@ export interface ReplacedChartSlot {
   model: WordChartModel;
 }
 
+export interface ChartMarkerMeta {
+  bindable: boolean;
+  schemaVersion: string;
+}
+
 export function replaceChartMarkers(
   container: HTMLElement,
   chartModels: Map<string, WordChartModel>,
-  chartLocations: Map<string, LocatedChart> = new Map()
+  chartLocations: Map<string, LocatedChart> = new Map(),
+  chartMeta: Map<string, ChartMarkerMeta> = new Map()
 ): ReplacedChartSlot[] {
   const replaced: ReplacedChartSlot[] = [];
   const processedMarkers = new Set<string>();
@@ -94,6 +100,12 @@ export function replaceChartMarkers(
         const location = chartLocations.get(fullMatch);
         if (location) {
           slotSpan.dataset.chartPartKey = normalizePartKey(location.chartPath);
+        }
+        slotSpan.dataset.chartType = model.type;
+        const meta = chartMeta.get(fullMatch);
+        if (meta) {
+          slotSpan.dataset.chartSchemaVersion = meta.schemaVersion;
+          slotSpan.dataset.chartBindable = String(meta.bindable);
         }
 
         // Apply dimensions

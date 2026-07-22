@@ -29,11 +29,13 @@ import DocxViewer from "./components/DocxViewer.vue";
 import LoadingOverlay from "./components/LoadingOverlay.vue";
 import ParseStatusPanel from "./components/ParseStatusPanel.vue";
 import SchemaTreeNode from "./components/SchemaTreeNode.vue";
+import ChartStructurePanel from "./components/ChartStructurePanel.vue";
 import {
   processDocx,
   type DocxProcessProgress,
   type DocxProcessResult,
 } from "./features/docx/processDocx";
+import type { ParsedWordChart } from "./features/docx/chart-analysis/models/types";
 import { chartInstanceManager } from "./features/docx/rendering/chartInstanceManager";
 import {
   decorateRenderedDocument,
@@ -46,8 +48,9 @@ import {
   refreshChartBindingTargetStates,
 } from "./features/binding/renderedChartBindings";
 import { formatImportSummary } from "./features/binding/importSummaryStatus";
+import { buildChartWorkspace, type ChartWorkspaceItem } from "./features/binding/chartWorkspace";
 
-type WorkspaceTab = "schema" | "bindings" | "properties";
+type WorkspaceTab = "schema" | "bindings" | "properties" | "chart-structure";
 
 const SAMPLE_PATH = "/samples/第一部分 科学监测结果.docx";
 
@@ -71,6 +74,7 @@ const unresolvedChartIds = ref<string[]>([]);
 const docxViewerRef = ref<InstanceType<typeof DocxViewer> | null>(null);
 
 const chartStats = ref(createEmptyChartStats());
+const parsedCharts = ref<ParsedWordChart[]>([]);
 const selectedItem = computed(
   () =>
     template.value?.mockItems.find(
@@ -81,6 +85,15 @@ const selectedChart = computed(
   () =>
     template.value?.charts.find(
       (chart) => chart.locatorId === selectedLocatorId.value
+    ) || null
+);
+const chartWorkspace = computed<ChartWorkspaceItem[]>(() =>
+  buildChartWorkspace(parsedCharts.value, template.value?.charts ?? [])
+);
+const selectedChartWorkspaceItem = computed<ChartWorkspaceItem | null>(
+  () =>
+    chartWorkspace.value.find(
+      (item) => item.locatorId === selectedLocatorId.value
     ) || null
 );
 const boundItems = computed(
@@ -108,6 +121,7 @@ const workspaceTabs: ReadonlyArray<readonly [WorkspaceTab, string]> = [
   ["schema", "数据源"],
   ["bindings", "已绑定"],
   ["properties", "属性"],
+  ["chart-structure", "图表结构"],
 ];
 
 let renderTaskId = 0;
@@ -131,6 +145,7 @@ function createEmptyChartStats() {
   return {
     totalCharts: 0,
     renderedCharts: 0,
+    partiallyRenderedCharts: 0,
     unsupportedCharts: 0,
     failedCharts: 0,
     charts: [] as DocxProcessResult["charts"],
@@ -189,10 +204,14 @@ async function handleFileSelected(file: File): Promise<void> {
       chartStats.value = {
         totalCharts: previewResult.value.totalCharts,
         renderedCharts: previewResult.value.renderedCharts,
+        partiallyRenderedCharts: previewResult.value.partiallyRenderedCharts,
         unsupportedCharts: previewResult.value.unsupportedCharts,
         failedCharts: previewResult.value.failedCharts,
         charts: previewResult.value.charts,
       };
+      parsedCharts.value = previewResult.value.charts
+        .map((c) => c.model)
+        .filter((m): m is ParsedWordChart => m !== null);
     }
 
     if (uploadResult.status === "rejected") {
@@ -400,6 +419,7 @@ function resetTemplateState(): void {
   selectedLocatorId.value = null;
   activeTab.value = "schema";
   chartStats.value = createEmptyChartStats();
+  parsedCharts.value = [];
   renderedLocatorCount.value = 0;
   renderedChartCount.value = 0;
   unresolvedLocatorIds.value = [];
@@ -567,6 +587,7 @@ function partLabel(item: MockItem): string {
         <ParseStatusPanel
           :total-charts="chartStats.totalCharts"
           :rendered-charts="chartStats.renderedCharts"
+          :partially-rendered-charts="chartStats.partiallyRenderedCharts"
           :unsupported-charts="chartStats.unsupportedCharts"
           :failed-charts="chartStats.failedCharts"
           :charts="chartStats.charts"
@@ -646,7 +667,7 @@ function partLabel(item: MockItem): string {
           </div>
         </section>
 
-        <section v-else class="tab-panel properties-panel">
+        <section v-else-if="activeTab === 'properties'" class="tab-panel properties-panel">
           <p v-if="!selectedItem && !selectedChart" class="empty-state">
             点击文档高亮、图表或左侧导航查看属性
           </p>
@@ -671,6 +692,10 @@ function partLabel(item: MockItem): string {
             <div><dt>已绑定集合</dt><dd>{{ selectedChart.boundDataPath || "未绑定" }}</dd></div>
             <div><dt>LocatorId</dt><dd>{{ selectedChart.locatorId }}</dd></div>
           </dl>
+        </section>
+
+        <section v-else-if="activeTab === 'chart-structure'" class="tab-panel">
+          <ChartStructurePanel :item="selectedChartWorkspaceItem" />
         </section>
       </aside>
     </div>

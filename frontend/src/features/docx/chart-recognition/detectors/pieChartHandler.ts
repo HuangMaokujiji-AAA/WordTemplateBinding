@@ -1,7 +1,7 @@
 import { OOXML_NS } from "../../ooxml/namespaces";
 import type { ChartTypeHandler, ChartParseContext } from "../chartDetector";
 import type { WordChartModel } from "../types";
-import { parsePieChart } from "../parsers/pieChartParser";
+import { parseChartViaAnalyzer } from "./analyzerBridge";
 
 export const PieChartHandler: ChartTypeHandler = {
   canHandle(chartXml: Document): boolean {
@@ -12,6 +12,6 @@ export const PieChartHandler: ChartTypeHandler = {
   },
 
   parse(context: ChartParseContext): Promise<WordChartModel> {
-    return parsePieChart(context);
+    return parseChartViaAnalyzer(context);
   },
 };

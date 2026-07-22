@@ -6,9 +6,13 @@ import { parseXmlString } from "./ooxml/xmlUtils";
 import { renderDocx } from "./rendering/renderDocx";
 import {
   replaceChartMarkers,
+  type ChartMarkerMeta,
 } from "./rendering/replaceChartMarkers";
 import { chartInstanceManager } from "./rendering/chartInstanceManager";
-import { findHandler, initChartRecognition } from "./chart-recognition/index";
+import { analyzeChartXml } from "./chart-analysis/parsers/chartXmlAnalyzer";
+import { toWordChartModel } from "./chart-analysis/render/toWordChartModel";
+import type { ParsedWordChart } from "./chart-analysis/models/types";
+import type { ChartDiagnostics } from "./chart-analysis/diagnostics/diagnostics";
 import { renderBarChart } from "./chart-recognition/renderers/EChartsBarRenderer";
 import { renderLineChart } from "./chart-recognition/renderers/EChartsLineRenderer";
 import { renderPieChart } from "./chart-recognition/renderers/EChartsPieRenderer";
@@ -32,7 +36,6 @@ export interface DocxProcessProgress {
   stage:
     | "idle"
     | "validating"
-    | "unzipping"
     | "locating-charts"
     | "injecting-markers"
     | "rendering-document"
@@ -44,19 +47,32 @@ export interface DocxProcessProgress {
   progress: number;
 }
 
+export type ChartProcessStatus = "rendered" | "partially-rendered" | "unsupported" | "failed";
+
+export interface ParsedChartProcessResult {
+  slotId: string;
+  sourcePath: string;
+  relationshipId: string;
+  documentOrder: number;
+
+  detectedType: string;
+
+  status: ChartProcessStatus;
+  message?: string;
+
+  /** Full chart-analysis model. Null only when analysis itself failed (status "failed"). */
+  model: ParsedWordChart | null;
+  diagnostics: ChartDiagnostics | null;
+}
+
 export interface DocxProcessResult {
   totalCharts: number;
   renderedCharts: number;
+  partiallyRenderedCharts: number;
   unsupportedCharts: number;
   failedCharts: number;
 
-  charts: Array<{
-    slotId: string;
-    sourcePath: string;
-    detectedType: string;
-    status: "rendered" | "unsupported" | "failed";
-    message?: string;
-  }>;
+  charts: ParsedChartProcessResult[];
 
   warnings: string[];
 }
@@ -77,22 +93,24 @@ export interface ProcessDocxOptions {
  *  4. Inject text markers in place of chart drawings
  *  5. Re-zip and render with docx-preview
  *  6. Find markers in rendered DOM
- *  7. Parse each chart XML into WordChartModel
- *  8. Render supported charts with ECharts, unsupported with placeholder
+ *  7. Analyze each chart's XML into a ParsedWordChart (chart-analysis)
+ *  8. Project each ParsedWordChart into a WordChartModel and render with
+ *     ECharts (or the unsupported placeholder)
+ *
+ * Every chart is analyzed exactly once per upload — the ECharts option is
+ * derived FROM the ParsedWordChart (chart-analysis/render/toWordChartModel),
+ * never by re-reading the chart XML.
  *
  * @param file - The uploaded .docx file.
  * @param options - Containers and progress callback.
- * @returns Processing result with chart statistics.
+ * @returns Processing result with per-chart structured models and statistics.
  */
 export async function processDocx(
   file: File,
   options: ProcessDocxOptions
 ): Promise<DocxProcessResult> {
   const warnings: string[] = [];
-  const chartResults: DocxProcessResult["charts"] = [];
-
-  // Initialize chart recognition handlers
-  initChartRecognition();
+  const chartResults: ParsedChartProcessResult[] = [];
 
   try {
     // Stage 1: Validate
@@ -166,20 +184,25 @@ export async function processDocx(
       options.styleContainer
     );
 
-    // Stage 5: Parse charts
+    // Stage 5: Analyze charts
     options.onProgress?.({
       stage: "parsing-charts",
       message: "正在解析图表数据...",
       progress: 65,
     });
 
-    // Build the chart model map (marker text → WordChartModel)
+    // Build the chart model map (marker text → WordChartModel) for the
+    // legacy marker-replacement/render step, alongside the full analysis
+    // results keyed by slotId for the extended return value.
     const chartModelMap = new Map<string, WordChartModel>();
     const chartLocationMap = new Map(
       locatedCharts.map((chart) => [chart.marker, chart])
     );
+    const chartMetaMap = new Map<string, ChartMarkerMeta>();
 
-    // Re-read the original zip for chart XML files
+    // Re-read the original zip for chart XML files — the zip mutated in
+    // Stage 3 has document.xml replaced with marker text, so chart XML
+    // must come from an independent load of the untouched original bytes.
     const origZip = await JSZip.loadAsync(arrayBuffer);
 
     for (const chart of locatedCharts) {
@@ -190,9 +213,13 @@ export async function processDocx(
           chartResults.push({
             slotId: chart.slotId,
             sourcePath: chart.chartPath,
+            relationshipId: chart.relationshipId,
+            documentOrder: chart.documentOrder,
             detectedType: "unknown",
             status: "failed",
             message: "Chart XML 文件未找到",
+            model: null,
+            diagnostics: null,
           });
           continue;
         }
@@ -200,40 +227,40 @@ export async function processDocx(
         const chartXmlString = await chartXmlFile.async("text");
         const chartXml = parseXmlString(chartXmlString);
 
-        const handler = findHandler(chartXml);
-        if (!handler) {
-          chartResults.push({
-            slotId: chart.slotId,
-            sourcePath: chart.chartPath,
-            detectedType: "unknown",
-            status: "failed",
-            message: "未找到对应的图表处理器",
-          });
-          continue;
-        }
-
-        const model = await handler.parse({
+        const parsed = await analyzeChartXml({
           chartXml,
           chartXmlPath: chart.chartPath,
           chartId: chart.slotId,
+          slotId: chart.slotId,
           relationshipId: chart.relationshipId,
-          zip: origZip,
+          documentOrder: chart.documentOrder,
+          marker: chart.marker,
           widthPx: chart.widthPx,
           heightPx: chart.heightPx,
+          widthEmu: chart.widthEmu ?? null,
+          heightEmu: chart.heightEmu ?? null,
+          zip: origZip,
         });
 
-        chartModelMap.set(chart.marker, model);
+        chartModelMap.set(chart.marker, toWordChartModel(parsed));
+        chartMetaMap.set(chart.marker, {
+          bindable: parsed.supportedForBinding,
+          schemaVersion: parsed.schemaVersion,
+        });
 
-        const detectedType =
-          model.type === "unsupported"
-            ? model.unsupportedReason?.match(/图表类型：(.+)/)?.[1] ?? "unsupported"
-            : model.type;
+        const status: ChartProcessStatus = parsed.supportedForPreview
+          ? (parsed.diagnostics.hasErrors ? "partially-rendered" : "rendered")
+          : "unsupported";
 
         chartResults.push({
           slotId: chart.slotId,
           sourcePath: chart.chartPath,
-          detectedType,
-          status: model.type === "unsupported" ? "unsupported" : "rendered",
+          relationshipId: chart.relationshipId,
+          documentOrder: chart.documentOrder,
+          detectedType: parsed.type,
+          status,
+          model: parsed,
+          diagnostics: parsed.diagnostics,
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -241,9 +268,13 @@ export async function processDocx(
         chartResults.push({
           slotId: chart.slotId,
           sourcePath: chart.chartPath,
+          relationshipId: chart.relationshipId,
+          documentOrder: chart.documentOrder,
           detectedType: "unknown",
           status: "failed",
           message: msg,
+          model: null,
+          diagnostics: null,
         });
       }
     }
@@ -258,7 +289,8 @@ export async function processDocx(
     const replacedSlots = replaceChartMarkers(
       options.documentContainer,
       chartModelMap,
-      chartLocationMap
+      chartLocationMap,
+      chartMetaMap
     );
 
     // Render each chart
@@ -307,14 +339,7 @@ export async function processDocx(
           }
         }
 
-        if (echartsInstance) {
-          chartInstanceManager.register(slot.slotId, echartsInstance);
-          chartInstanceManager.observeResize(
-            slot.slotId,
-            echartsInstance,
-            (canvasEl.parentElement as HTMLElement) || canvasEl
-          );
-        } else if (model.type !== "unsupported") {
+        if (!echartsInstance && model.type !== "unsupported") {
           const resultEntry = chartResults.find(
             (r) => r.slotId === slot.slotId
           );
@@ -322,6 +347,16 @@ export async function processDocx(
             resultEntry.status = "failed";
             resultEntry.message = "ECharts 渲染失败";
           }
+          continue;
+        }
+
+        if (echartsInstance) {
+          chartInstanceManager.register(slot.slotId, echartsInstance);
+          chartInstanceManager.observeResize(
+            slot.slotId,
+            echartsInstance,
+            (canvasEl.parentElement as HTMLElement) || canvasEl
+          );
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -336,15 +371,10 @@ export async function processDocx(
 
     // Compute final stats
     const totalCharts = chartResults.length;
-    const renderedCharts = chartResults.filter(
-      (r) => r.status === "rendered"
-    ).length;
-    const unsupportedCharts = chartResults.filter(
-      (r) => r.status === "unsupported"
-    ).length;
-    const failedCharts = chartResults.filter(
-      (r) => r.status === "failed"
-    ).length;
+    const renderedCharts = chartResults.filter((r) => r.status === "rendered").length;
+    const partiallyRenderedCharts = chartResults.filter((r) => r.status === "partially-rendered").length;
+    const unsupportedCharts = chartResults.filter((r) => r.status === "unsupported").length;
+    const failedCharts = chartResults.filter((r) => r.status === "failed").length;
 
     options.onProgress?.({
       stage: "completed",
@@ -355,6 +385,7 @@ export async function processDocx(
     return {
       totalCharts,
       renderedCharts,
+      partiallyRenderedCharts,
       unsupportedCharts,
       failedCharts,
       charts: chartResults,
@@ -371,6 +402,7 @@ export async function processDocx(
     return {
       totalCharts: 0,
       renderedCharts: 0,
+      partiallyRenderedCharts: 0,
       unsupportedCharts: 0,
       failedCharts: 0,
       charts: [],

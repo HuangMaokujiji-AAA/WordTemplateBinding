@@ -1,7 +1,7 @@
 import { OOXML_NS } from "../../ooxml/namespaces";
 import type { ChartTypeHandler, ChartParseContext } from "../chartDetector";
 import type { WordChartModel } from "../types";
-import { parseLineChart } from "../parsers/lineChartParser";
+import { parseChartViaAnalyzer } from "./analyzerBridge";
 
 export const LineChartHandler: ChartTypeHandler = {
   canHandle(chartXml: Document): boolean {
@@ -13,7 +13,7 @@ export const LineChartHandler: ChartTypeHandler = {
   },
 
   parse(context: ChartParseContext): Promise<WordChartModel> {
-    return parseLineChart(context);
+    return parseChartViaAnalyzer(context);
   },
 };
 

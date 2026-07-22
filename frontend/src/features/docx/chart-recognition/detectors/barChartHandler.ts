@@ -1,7 +1,7 @@
 import type { ChartTypeHandler, ChartParseContext } from "../chartDetector";
 import type { WordChartModel } from "../types";
 import { detectBarChart } from "./barChartDetector";
-import { parseBarChart } from "../parsers/barChartParser";
+import { parseChartViaAnalyzer } from "./analyzerBridge";
 
 /**
  * Handler for 2D bar/column charts.
@@ -16,6 +16,6 @@ export const BarChartHandler: ChartTypeHandler = {
   },
 
   parse(context: ChartParseContext): Promise<WordChartModel> {
-    return parseBarChart(context);
+    return parseChartViaAnalyzer(context);
   },
 };
