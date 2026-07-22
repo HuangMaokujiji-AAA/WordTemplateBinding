@@ -12,6 +12,9 @@ namespace WordTemplateBinding.Api.Endpoints;
 /// </summary>
 public static class TemplateEndpoints
 {
+    private const string DocxContentType =
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
     /// <summary>
     /// 映射模板管理端点。
     /// </summary>
@@ -23,6 +26,7 @@ public static class TemplateEndpoints
         group.MapPost("/upload", UploadAsync);
         group.MapGet("/{templateId:guid}", GetAsync);
         group.MapPost("/{templateId:guid}/rescan", RescanAsync);
+        group.MapPost("/{templateId:guid}/export-reusable", ExportReusableAsync);
         return endpoints;
     }
 
@@ -114,5 +118,34 @@ public static class TemplateEndpoints
             template.ScanResult.MockItems.Count,
             bindings.Count);
         return Results.Ok(ApiContractMapper.ToResponse(template, bindings));
+    }
+
+    /// <summary>
+    /// 将当前绑定写成字段路径占位符和图表清单并返回独立 DOCX。
+    /// </summary>
+    /// <param name="templateId">模板唯一标识。</param>
+    /// <param name="service">复用模板导出业务服务。</param>
+    /// <param name="logger">结构化日志记录器。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>返回可复用 DOCX 文件。</returns>
+    private static async Task<IResult> ExportReusableAsync(
+        Guid templateId,
+        ReusableTemplateWorkflowService service,
+        ILoggerFactory logger,
+        CancellationToken cancellationToken)
+    {
+        Stopwatch stopwatch = Stopwatch.StartNew();
+        RenderedTemplate renderedTemplate = await service.ExportAsync(
+            templateId,
+            cancellationToken);
+        stopwatch.Stop();
+        logger.CreateLogger("ReusableTemplateExport").LogInformation(
+            "复用模板导出完成，TemplateId={TemplateId}, ElapsedMs={ElapsedMs}",
+            templateId,
+            stopwatch.ElapsedMilliseconds);
+        return Results.File(
+            renderedTemplate.GetBytesCopy(),
+            DocxContentType,
+            renderedTemplate.FileName);
     }
 }

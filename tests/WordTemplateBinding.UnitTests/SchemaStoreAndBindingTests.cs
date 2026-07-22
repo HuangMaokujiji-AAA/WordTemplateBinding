@@ -153,6 +153,24 @@ public sealed class SchemaStoreAndBindingTests
     }
 
     /// <summary>
+    /// 验证重新上传的字段路径占位符可改绑到另一个兼容标量字段。
+    /// </summary>
+    [Fact]
+    public async Task BindingWorkflow_ReusablePathPlaceholder_CanChangeScalarBinding()
+    {
+        (BindingWorkflowService service, TemplateDocument template, MockDataItem item) =
+            await CreateBindingServiceAsync("{{StudentStatistics.AverageScore}}");
+
+        TemplateBinding binding = await service.UpsertAsync(
+            template.Id,
+            item.LocatorId,
+            "StudentStatistics.PassRate");
+
+        Assert.Equal("StudentStatistics.PassRate", binding.DataPath);
+        Assert.Equal(DataValueType.Decimal, binding.DataType);
+    }
+
+    /// <summary>
     /// 验证图表只能绑定可用的集合字段。
     /// </summary>
     [Fact]

@@ -2,11 +2,14 @@
 
 WordTemplateBinding 是一个基于 .NET 7、ASP.NET Core Minimal API 和 Open XML SDK 的 Word 模板可视化数据绑定 MVP。
 
-第一阶段提供完整闭环：
+当前版本提供两条互不混淆的输出链路，以及可复用模板的完整闭环：
 
 ```text
 上传 DOCX → 扫描小数、整数和显式文字模拟值 → 结构化预览高亮
-→ 拖拽数据字段 → 保存绑定 → 生成并下载 DOCX
+→ 拖拽数据字段 → 保存绑定
+├─ A. 读取真实/演示数据 → 生成最终报告 DOCX
+└─ B. 写入 {{完整数据路径}} 和图表 Manifest → 导出可复用模板 DOCX
+       → 以后重新上传 → 后端自动恢复绑定 → 继续编辑或直接生成报告
 ```
 
 ## 环境要求
@@ -44,8 +47,8 @@ WordTemplateBinding.sln
 
 ### 项目职责
 
-- `Core`：领域模型、存储和处理接口、业务异常以及模板/绑定/报告业务编排。
-- `Infrastructure`：OpenXML 扫描与局部替换、内存存储、演示 Schema 和数据值。
+- `Core`：领域模型、存储和处理接口、业务异常以及模板/绑定/报告/复用模板业务编排。
+- `Infrastructure`：OpenXML 扫描、共享文本范围替换、图表 Manifest、内存存储、演示 Schema 和数据值。
 - `Api`：Minimal API、ProblemDetails、上传下载安全处理和原生 HTML/CSS/JavaScript 页面。
 - `UnitTests`：程序化 DOCX 扫描、替换、格式保留、存储、Schema、绑定和值格式化测试。
 - `IntegrationTests`：通过 `WebApplicationFactory` 验证 HTTP 功能闭环和生成 DOCX。
@@ -126,8 +129,12 @@ dotnet run --project .\src\WordTemplateBinding.Api --urls http://127.0.0.1:5080
 4. 在右侧数据源中展开字段树或搜索 `AverageScore`。
 5. 将 `StudentStatistics.AverageScore` 拖到高亮的 `88.5` 上。
 6. 检查高亮变为绿色、右侧已绑定列表和属性信息同步更新。
-7. 点击“生成报告”，下载生成的 `.docx`。
-8. 使用 Microsoft Word 或 WPS Office 打开并检查替换值和原模板格式。
+7. 选择一种输出：
+   - 点击“生成报告”，下载已经写入真实/演示值的最终 `.docx`；
+   - 点击“导出复用模板”，下载 `{原文件名}-template.docx`，文本绑定会写成 `{{StudentStatistics.AverageScore}}`，图表绑定会保存在 DOCX 内嵌 Manifest 中。
+8. 可将复用模板转移或保存，以后重新上传；后端会按当前 Schema 自动恢复有效绑定，前端直接显示绿色状态。
+9. 对自动恢复结果继续取消、修改或增加绑定，也可直接点击“生成报告”。
+10. 使用 Microsoft Word 或 WPS Office 打开并检查替换值、原模板格式和可编辑图表。
 
 如果生成请求没有显式提供字段值，系统使用内存演示值；`StudentStatistics.AverageScore` 的默认演示值为 `92.3`。
 
@@ -171,7 +178,7 @@ Word 原生图表使用模板哈希、`/word/charts/chartN.xml` 部件 URI、关
 
 ### 局部替换
 
-报告生成从原始模板字节创建新的内存副本，只修改目标 `Text.Text`：
+最终报告和复用模板导出都从原始模板字节创建新的内存副本，并共用同一套 `OpenXmlTextReplacementService` 局部替换策略：
 
 - 同一段落的替换从后向前执行；
 - 新值写入首个相关 Text 节点，继承首个 Run 的格式；
@@ -182,7 +189,23 @@ Word 原生图表使用模板哈希、`/word/charts/chartN.xml` 部件 URI、关
 
 ### 原始模板不可变
 
-模板模型和内存存储均对原始字节执行防御性复制。每次报告生成使用新的 `MemoryStream`，连续生成不会相互影响。
+模板模型和内存存储均对原始字节执行防御性复制。每次报告生成或复用模板导出都使用新的 `MemoryStream`，连续操作不会相互影响。
+
+### 可复用模板与自动恢复
+
+文本绑定的标准占位符协议是 `{{完整数据路径}}`，路径必须与 `DataFieldNode.path` 使用 `StringComparison.Ordinal` 完全一致。例如 `{{StudentStatistics.AverageScore}}`。旧的 `{{text:完整数据路径}}` 在导入时兼容，但新导出统一使用无前缀形式。
+
+上传或重新扫描完成后，后端而非 Vue 前端负责恢复绑定：
+
+- 显式占位符精确查询当前 Schema；可绑定的非集合字段恢复为文本绑定；
+- 普通 `{{年度报告}}` 若不是字段路径，仍作为未绑定模拟文字；
+- 未知路径、大小写不一致和类型变化不会拒绝模板，而是进入 `importSummary`；
+- 同一路径出现多次时，每个新 Locator 都建立独立绑定；
+- 图表本体保持不变，绑定写入命名空间为 `urn:word-template-binding:bindings:v1`、版本为 `1` 的 `CustomXmlPart`；重新上传时按 ChartPart、关系 ID 和文档顺序分级匹配。
+
+Manifest 不保存真实数据、模板正文、数据库连接或认证信息，也不会覆盖其他软件的 CustomXmlPart。损坏或无法匹配的 Manifest 只产生警告，文本占位符恢复仍会继续。
+
+复用模板命名为 `{stem}-template.docx`；如果 stem 已以 `-template` 结尾（忽略大小写），不会再次追加。最终报告继续使用原有 `{stem}_generated.docx` 规则。
 
 ## API 文档
 
@@ -199,6 +222,8 @@ Word 原生图表使用模板哈希、`/word/charts/chartN.xml` 部件 URI、关
 - 集合字段当前仅用于整张图表的数据绑定，不用于循环表格。
 - 支持更新 Word 原生图表的分类、系列名称和数值缓存；当前不增加或删除系列，也不回写图表内嵌 Excel 工作簿。
 - 不支持循环表格、条件、图片替换、HTML 富文本、除 `{{...}}`/`{{text:...}}` 外的模板语法或 PDF 转换。
+- 自动恢复只接受当前内存 Schema 中完全一致且类型兼容的路径；未知字段和 Schema 类型变化需要用户手动修复。
+- 图表 Manifest 当前只覆盖主文档中已扫描的 Word 原生图表；不能唯一匹配时保持未绑定。
 - 不包含用户登录、权限、数据库、模板版本或多人协作。
 
 ## 安全约束

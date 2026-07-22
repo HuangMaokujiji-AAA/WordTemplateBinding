@@ -146,6 +146,22 @@ public sealed class EmptyBindingsException : WordTemplateBindingException
 }
 
 /// <summary>
+/// 表示当前模板没有可导出的绑定关系。
+/// </summary>
+public sealed class EmptyReusableTemplateBindingsException : WordTemplateBindingException
+{
+    /// <summary>
+    /// 初始化复用模板空绑定异常。
+    /// </summary>
+    public EmptyReusableTemplateBindingsException()
+        : base(
+            "empty_reusable_template_bindings",
+            "当前模板尚未建立任何数据绑定，无法导出复用模板。")
+    {
+    }
+}
+
+/// <summary>
 /// 表示绑定字段缺少可用的数据值。
 /// </summary>
 public sealed class MissingDataValueException : WordTemplateBindingException
@@ -188,6 +204,22 @@ public sealed class ReportRenderingException : WordTemplateBindingException
     /// <param name="innerException">底层异常。</param>
     public ReportRenderingException(string message, Exception? innerException = null)
         : base("report_rendering_failed", message, innerException)
+    {
+    }
+}
+
+/// <summary>
+/// 表示可复用模板导出时定位、占位符或 OpenXML 校验失败。
+/// </summary>
+public sealed class ReusableTemplateRenderingException : WordTemplateBindingException
+{
+    /// <summary>
+    /// 初始化复用模板渲染异常。
+    /// </summary>
+    /// <param name="message">安全的失败说明。</param>
+    /// <param name="innerException">底层异常。</param>
+    public ReusableTemplateRenderingException(string message, Exception? innerException = null)
+        : base("reusable_template_rendering_failed", message, innerException)
     {
     }
 }

@@ -17,8 +17,18 @@ internal sealed record TemplateResponse(
     IReadOnlyList<MockItemResponse> MockItems,
     IReadOnlyList<ChartItemResponse> Charts,
     PreviewResponse Preview,
+    TemplateImportSummaryResponse ImportSummary,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt);
+
+/// <summary>
+/// 表示复用模板上传或重扫后的自动绑定恢复摘要。
+/// </summary>
+internal sealed record TemplateImportSummaryResponse(
+    int TextBindingsRestored,
+    int ChartBindingsRestored,
+    IReadOnlyList<string> UnresolvedPlaceholders,
+    IReadOnlyList<string> Warnings);
 
 /// <summary>
 /// 表示 API 返回的模拟数据项及其当前绑定状态。
@@ -230,6 +240,11 @@ internal static class ApiContractMapper
             mockItems,
             charts,
             ToResponse(template.ScanResult.Preview),
+            new TemplateImportSummaryResponse(
+                template.ImportSummary.TextBindingsRestored,
+                template.ImportSummary.ChartBindingsRestored,
+                template.ImportSummary.UnresolvedPlaceholders,
+                template.ImportSummary.Warnings),
             template.CreatedAt,
             template.UpdatedAt);
     }

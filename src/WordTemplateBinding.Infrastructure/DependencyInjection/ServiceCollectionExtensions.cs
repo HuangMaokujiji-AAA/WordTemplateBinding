@@ -36,10 +36,13 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IMockDataRecognizer, IntegerNumberRecognizer>();
         services.AddSingleton<IMockDataRecognizer, ExplicitTextRecognizer>();
         services.AddSingleton<IWordTemplateScanner, WordTemplateScanner>();
+        services.AddSingleton<ITemplateAutoBindingResolver, TemplateAutoBindingResolver>();
         services.AddSingleton<IWordReportRenderer, WordReportRenderer>();
+        services.AddSingleton<IWordReusableTemplateRenderer, WordReusableTemplateRenderer>();
         services.AddScoped<TemplateWorkflowService>();
         services.AddScoped<BindingWorkflowService>();
         services.AddScoped<ReportWorkflowService>();
+        services.AddScoped<ReusableTemplateWorkflowService>();
         return services;
     }
 }

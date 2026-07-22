@@ -26,7 +26,6 @@ public sealed class InMemoryDataSchemaProvider : IDataSchemaProvider
         _searchableNodes = new ReadOnlyCollection<DataFieldNode>(allNodes);
         _definitions = new ReadOnlyDictionary<string, DataFieldDefinition>(
             allNodes
-                .Where(node => node.IsBindable)
                 .ToDictionary(
                     node => node.Path,
                     node => new DataFieldDefinition

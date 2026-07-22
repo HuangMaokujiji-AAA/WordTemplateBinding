@@ -46,6 +46,7 @@ public sealed class ExplicitTextRecognizer : IMockDataRecognizer
                 Value = valueGroup.Value,
                 OriginalText = match.Value,
                 DataType = MockDataType.String,
+                PlaceholderCandidatePath = valueGroup.Value,
             });
         }
 

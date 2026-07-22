@@ -61,11 +61,23 @@ public sealed class BindingWorkflowService
 
         DataFieldDefinition field = await _schemaProvider.FindByPathAsync(dataPath, cancellationToken)
             ?? throw new DataFieldNotFoundException(dataPath);
+        bool isReusablePathPlaceholder = false;
+        if (!string.IsNullOrEmpty(mockItem?.PlaceholderCandidatePath))
+        {
+            DataFieldDefinition? placeholderField = await _schemaProvider.FindByPathAsync(
+                mockItem.PlaceholderCandidatePath,
+                cancellationToken);
+            isReusablePathPlaceholder = placeholderField is
+            {
+                IsBindable: true,
+                Type: not DataValueType.Array,
+            };
+        }
 
         BindingTargetKind targetKind = chartItem is null
             ? BindingTargetKind.Text
             : BindingTargetKind.Chart;
-        ValidateCompatibility(mockItem, chartItem, field);
+        ValidateCompatibility(mockItem, chartItem, field, isReusablePathPlaceholder);
 
         IReadOnlyList<TemplateBinding> currentBindings =
             await _bindingStore.GetByTemplateAsync(templateId, cancellationToken);
@@ -131,10 +143,12 @@ public sealed class BindingWorkflowService
     /// <param name="mockItem">模板模拟数据。</param>
     /// <param name="chartItem">模板图表目标。</param>
     /// <param name="field">数据字段定义。</param>
+    /// <param name="isReusablePathPlaceholder">目标是否为已确认的复用模板字段路径占位符。</param>
     private static void ValidateCompatibility(
         MockDataItem? mockItem,
         ChartTemplateItem? chartItem,
-        DataFieldDefinition field)
+        DataFieldDefinition field,
+        bool isReusablePathPlaceholder)
     {
         if (!field.IsBindable)
         {
@@ -163,7 +177,9 @@ public sealed class BindingWorkflowService
             throw new BindingValidationException("绑定目标不存在。");
         }
 
-        bool isCompatible = mockItem.DataType switch
+        bool isCompatible = isReusablePathPlaceholder
+            ? field.Type != DataValueType.Array
+            : mockItem.DataType switch
         {
             MockDataType.Decimal or MockDataType.Integer =>
                 field.Type is DataValueType.Integer or DataValueType.Decimal,

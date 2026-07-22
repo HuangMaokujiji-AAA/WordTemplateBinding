@@ -13,6 +13,7 @@ public sealed class TemplateWorkflowService
     private readonly ITemplateStore _templateStore;
     private readonly IBindingStore _bindingStore;
     private readonly IWordTemplateScanner _scanner;
+    private readonly ITemplateAutoBindingResolver _autoBindingResolver;
     private readonly TemplateProcessingOptions _options;
     private readonly IClock _clock;
 
@@ -22,18 +23,21 @@ public sealed class TemplateWorkflowService
     /// <param name="templateStore">模板存储。</param>
     /// <param name="bindingStore">绑定存储。</param>
     /// <param name="scanner">Word 模板扫描器。</param>
+    /// <param name="autoBindingResolver">复用模板自动绑定恢复器。</param>
     /// <param name="options">模板处理配置。</param>
     /// <param name="clock">系统时间来源。</param>
     public TemplateWorkflowService(
         ITemplateStore templateStore,
         IBindingStore bindingStore,
         IWordTemplateScanner scanner,
+        ITemplateAutoBindingResolver autoBindingResolver,
         TemplateProcessingOptions options,
         IClock clock)
     {
         _templateStore = templateStore;
         _bindingStore = bindingStore;
         _scanner = scanner;
+        _autoBindingResolver = autoBindingResolver;
         _options = options;
         _clock = clock;
     }
@@ -69,6 +73,11 @@ public sealed class TemplateWorkflowService
             now,
             now);
 
+        await _templateStore.SaveAsync(template, cancellationToken);
+        TemplateImportSummary importSummary = await _autoBindingResolver.ResolveAsync(
+            template,
+            cancellationToken);
+        template.UpdateImportSummary(importSummary);
         await _templateStore.SaveAsync(template, cancellationToken);
         return template.CreateSnapshot();
     }
@@ -120,6 +129,10 @@ public sealed class TemplateWorkflowService
         }
 
         template.UpdateScanResult(scanResult, _clock.UtcNow);
+        TemplateImportSummary importSummary = await _autoBindingResolver.ResolveAsync(
+            template,
+            cancellationToken);
+        template.UpdateImportSummary(importSummary);
         await _templateStore.SaveAsync(template, cancellationToken);
         return template.CreateSnapshot();
     }

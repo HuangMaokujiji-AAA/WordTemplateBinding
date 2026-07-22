@@ -92,6 +92,7 @@ public sealed class WordTemplateScanner : IWordTemplateScanner
                 mainPart,
                 contentHash,
                 _locatorIdGenerator);
+            ReusableTemplateManifest manifest = ReusableTemplateManifestSerializer.Read(mainPart);
 
             IReadOnlyList<MockDataItem> readOnlyItems = mockItems.AsReadOnly();
             return Task.FromResult(new TemplateScanResult
@@ -100,6 +101,7 @@ public sealed class WordTemplateScanner : IWordTemplateScanner
                 MockItems = readOnlyItems,
                 Charts = charts,
                 Preview = _previewBuilder.Build(paragraphTexts.AsReadOnly(), readOnlyItems),
+                BindingManifest = manifest,
             });
         }
         catch (InvalidTemplateFileException)
@@ -175,6 +177,7 @@ public sealed class WordTemplateScanner : IWordTemplateScanner
                     PreviewParagraphIndex = previewParagraphIndex,
                     IsBound = false,
                     BoundDataPath = null,
+                    PlaceholderCandidatePath = item.PlaceholderCandidatePath,
                 });
             }
         }

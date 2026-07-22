@@ -1,6 +1,7 @@
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
+using System.Text;
 using C = DocumentFormat.OpenXml.Drawing.Charts;
 using A = DocumentFormat.OpenXml.Drawing;
 using DW = DocumentFormat.OpenXml.Drawing.Wordprocessing;
@@ -287,6 +288,88 @@ internal static class OpenXmlTestDocumentFactory
         Run run = document.MainDocumentPart?.Document?.Body?.Descendants<Run>().First()
             ?? throw new InvalidOperationException("测试文档不包含 Run。");
         return (Run)run.CloneNode(true);
+    }
+
+    /// <summary>
+    /// 读取本系统绑定 Manifest XML。
+    /// </summary>
+    /// <param name="bytes">DOCX 字节。</param>
+    /// <returns>返回包含固定命名空间的清单 XML。</returns>
+    internal static string ReadBindingManifest(byte[] bytes)
+    {
+        using MemoryStream stream = new(bytes, writable: false);
+        using WordprocessingDocument document = WordprocessingDocument.Open(stream, false);
+        CustomXmlPart part = document.MainDocumentPart?.CustomXmlParts.First(item =>
+            ReadPartText(item).Contains(
+                "urn:word-template-binding:bindings:v1",
+                StringComparison.Ordinal))
+            ?? throw new InvalidOperationException("测试文档不包含绑定 Manifest。");
+        return ReadPartText(part);
+    }
+
+    /// <summary>
+    /// 读取第一个图表部件的原始 XML。
+    /// </summary>
+    /// <param name="bytes">DOCX 字节。</param>
+    /// <returns>返回图表 XML。</returns>
+    internal static string ReadFirstChartXml(byte[] bytes)
+    {
+        using MemoryStream stream = new(bytes, writable: false);
+        using WordprocessingDocument document = WordprocessingDocument.Open(stream, false);
+        ChartPart part = document.MainDocumentPart?.ChartParts.First()
+            ?? throw new InvalidOperationException("测试文档不包含图表。");
+        return ReadPartText(part);
+    }
+
+    /// <summary>
+    /// 向 DOCX 添加任意自定义 XML 部件。
+    /// </summary>
+    /// <param name="bytes">原始 DOCX 字节。</param>
+    /// <param name="xml">自定义 XML 文本。</param>
+    /// <returns>返回修改后的 DOCX 字节。</returns>
+    internal static byte[] AddCustomXmlPart(byte[] bytes, string xml)
+    {
+        using MemoryStream stream = new();
+        stream.Write(bytes);
+        stream.Position = 0;
+        using (WordprocessingDocument document = WordprocessingDocument.Open(stream, true))
+        {
+            MainDocumentPart mainPart = document.MainDocumentPart
+                ?? throw new InvalidOperationException("测试文档缺少主文档部件。");
+            CustomXmlPart part = mainPart.AddCustomXmlPart("application/xml");
+            using Stream output = part.GetStream(FileMode.Create, FileAccess.Write);
+            using StreamWriter writer = new(output, new UTF8Encoding(false), leaveOpen: false);
+            writer.Write(xml);
+        }
+
+        return stream.ToArray();
+    }
+
+    /// <summary>
+    /// 读取 DOCX 中全部自定义 XML 部件。
+    /// </summary>
+    /// <param name="bytes">DOCX 字节。</param>
+    /// <returns>返回自定义 XML 文本列表。</returns>
+    internal static IReadOnlyList<string> ReadAllCustomXmlParts(byte[] bytes)
+    {
+        using MemoryStream stream = new(bytes, writable: false);
+        using WordprocessingDocument document = WordprocessingDocument.Open(stream, false);
+        if (document.MainDocumentPart is null)
+        {
+            return Array.Empty<string>();
+        }
+
+        return document.MainDocumentPart.CustomXmlParts
+            .Select(ReadPartText)
+            .ToList()
+            .AsReadOnly();
+    }
+
+    private static string ReadPartText(OpenXmlPart part)
+    {
+        using Stream stream = part.GetStream(FileMode.Open, FileAccess.Read);
+        using StreamReader reader = new(stream, Encoding.UTF8, true);
+        return reader.ReadToEnd();
     }
 
     /// <summary>

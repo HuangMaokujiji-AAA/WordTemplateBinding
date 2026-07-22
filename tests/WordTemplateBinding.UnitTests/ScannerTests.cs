@@ -266,6 +266,18 @@ public sealed class ScannerTests
     }
 
     /// <summary>
+    /// 验证空双花括号不会成为可自动绑定的字段路径候选。
+    /// </summary>
+    [Fact]
+    public async Task ScanAsync_EmptyPlaceholder_ReturnsNoItems()
+    {
+        TemplateScanResult result = await _scanner.ScanAsync(
+            OpenXmlTestDocumentFactory.CreateParagraphDocument("{{}}"));
+
+        Assert.Empty(result.MockItems);
+    }
+
+    /// <summary>
     /// 验证显式文字标记跨 Run 时仍作为一个字符串模拟数据识别。
     /// </summary>
     [Fact]

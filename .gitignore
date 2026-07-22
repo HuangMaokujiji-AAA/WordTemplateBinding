@@ -35,7 +35,10 @@ BenchmarkDotNet.Artifacts/
 
 # Local agent metadata and project documentation
 .agents/
-docs/
+docs/*
+!docs/api.md
+!docs/phase1-design.md
+frontend/docs/
 
 # Operating-system metadata
 .DS_Store

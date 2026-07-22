@@ -15,7 +15,7 @@ namespace WordTemplateBinding.Infrastructure.OpenXml;
 public sealed class WordReportRenderer : IWordReportRenderer
 {
     private readonly IDataValueFormatter _formatter;
-    private readonly TemplateProcessingOptions _options;
+    private readonly OpenXmlTextReplacementService _textReplacementService;
 
     /// <summary>
     /// 初始化 Word 报告渲染器。
@@ -27,7 +27,7 @@ public sealed class WordReportRenderer : IWordReportRenderer
         TemplateProcessingOptions options)
     {
         _formatter = formatter;
-        _options = options;
+        _textReplacementService = new OpenXmlTextReplacementService(options);
     }
 
     /// <inheritdoc />
@@ -58,51 +58,15 @@ public sealed class WordReportRenderer : IWordReportRenderer
                     bindings.Where(binding => binding.TargetKind == BindingTargetKind.Text).ToList(),
                     values,
                     mockItems);
-
-                foreach (IGrouping<DocumentPartLocatorKey, ReplacementInstruction> partGroup
-                             in replacements.GroupBy(item => new DocumentPartLocatorKey(
-                                 item.MockItem.Locator.PartKind,
-                                 item.MockItem.Locator.PartKey)))
-                {
-                    ReplacementInstruction firstPartReplacement = partGroup.First();
-                    DocumentPartContext partContext = ResolveDocumentPart(
-                        mainPart,
-                        partGroup.Key,
-                        firstPartReplacement.Binding.LocatorId);
-
-                    foreach (IGrouping<int, ReplacementInstruction> paragraphGroup
-                                 in partGroup.GroupBy(
-                                     item => item.MockItem.Locator.ParagraphIndex))
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        int paragraphIndex = paragraphGroup.Key;
-                        if (paragraphIndex < 0 || paragraphIndex >= partContext.Paragraphs.Count)
-                        {
-                            throw new LocatorNotFoundException(
-                                paragraphGroup.First().Binding.LocatorId);
-                        }
-
-                        ParagraphTextMap map = ParagraphTextMapBuilder.Build(
-                            partContext.Paragraphs[paragraphIndex]);
-                        List<ReplacementInstruction> paragraphReplacements = paragraphGroup
-                            .OrderBy(item => item.MockItem.Locator.StartOffset)
-                            .ToList();
-                        ValidateParagraphReplacements(map, paragraphReplacements);
-
-                        // 必须从后向前替换，避免后方文本长度变化破坏同段落前方定位。
-                        foreach (ReplacementInstruction replacement in paragraphReplacements
-                                     .OrderByDescending(
-                                         item => item.MockItem.Locator.StartOffset))
-                        {
-                            ReplaceMappedText(
-                                map,
-                                replacement.MockItem.Locator,
-                                replacement.FormattedValue);
-                        }
-                    }
-
-                    partContext.Save();
-                }
+                _textReplacementService.ReplaceAll(
+                    mainPart,
+                    replacements.Select(item => new OpenXmlTextReplacement(
+                            item.Binding.LocatorId,
+                            item.MockItem.Locator,
+                            item.FormattedValue))
+                        .ToList()
+                        .AsReadOnly(),
+                    cancellationToken);
 
                 foreach (TemplateBinding binding in bindings.Where(
                              binding => binding.TargetKind == BindingTargetKind.Chart))
@@ -197,141 +161,6 @@ public sealed class WordReportRenderer : IWordReportRenderer
     }
 
     /// <summary>
-    /// 在写入前统一校验定位原值、上下文和范围重叠，保证修改过程具有原子性。
-    /// </summary>
-    /// <param name="map">目标段落文本映射。</param>
-    /// <param name="replacements">该段落的替换指令。</param>
-    private void ValidateParagraphReplacements(
-        ParagraphTextMap map,
-        IReadOnlyList<ReplacementInstruction> replacements)
-    {
-        int previousEnd = -1;
-        foreach (ReplacementInstruction replacement in replacements)
-        {
-            TextLocator locator = replacement.MockItem.Locator;
-            int endOffset = locator.StartOffset + locator.Length;
-            if (!OpenXmlDocumentHelpers.IsSupportedTextLocator(locator) ||
-                locator.StartOffset < 0 ||
-                locator.Length <= 0 ||
-                endOffset > map.FullText.Length)
-            {
-                throw new LocatorNotFoundException(replacement.Binding.LocatorId);
-            }
-
-            if (locator.StartOffset < previousEnd)
-            {
-                throw new ReportRenderingException("同一段落中的绑定范围发生重叠。");
-            }
-
-            string currentValue = map.FullText.Substring(locator.StartOffset, locator.Length);
-            string contextHash = OpenXmlDocumentHelpers.ComputeContextHash(
-                map.FullText,
-                locator.StartOffset,
-                locator.Length,
-                _options.ContextLength);
-            if (!string.Equals(currentValue, locator.OriginalValue, StringComparison.Ordinal) ||
-                !string.Equals(contextHash, locator.ContextHash, StringComparison.Ordinal))
-            {
-                throw new LocatorNotFoundException(replacement.Binding.LocatorId);
-            }
-
-            previousEnd = endOffset;
-        }
-    }
-
-    /// <summary>
-    /// 根据结构化部件定位解析正文或具体页脚的段落集合和保存动作。
-    /// </summary>
-    private static DocumentPartContext ResolveDocumentPart(
-        MainDocumentPart mainPart,
-        DocumentPartLocatorKey key,
-        string locatorId)
-    {
-        if (key.PartKind == DocumentPartKind.MainDocument &&
-            string.Equals(
-                key.PartKey,
-                OpenXmlDocumentHelpers.MainDocumentPartKey,
-                StringComparison.Ordinal))
-        {
-            Body body = mainPart.Document?.Body
-                ?? throw new ReportRenderingException("模板缺少主文档正文。");
-            return new DocumentPartContext(
-                OpenXmlDocumentHelpers.GetMainDocumentParagraphs(body),
-                () => mainPart.Document.Save());
-        }
-
-        if (key.PartKind == DocumentPartKind.Footer)
-        {
-            FooterPart? footerPart = mainPart.FooterParts.FirstOrDefault(part =>
-                string.Equals(
-                    part.Uri.OriginalString,
-                    key.PartKey,
-                    StringComparison.Ordinal));
-            if (footerPart?.Footer is null)
-            {
-                throw new LocatorNotFoundException(locatorId);
-            }
-
-            return new DocumentPartContext(
-                OpenXmlDocumentHelpers.GetTextParagraphs(footerPart.Footer),
-                () => footerPart.Footer.Save());
-        }
-
-        throw new LocatorNotFoundException(locatorId);
-    }
-
-    /// <summary>
-    /// 将跨一个或多个 Text 节点的目标范围局部替换为新值。
-    /// </summary>
-    /// <param name="map">扫描时同构的段落文本映射。</param>
-    /// <param name="locator">目标定位信息。</param>
-    /// <param name="replacementValue">已经格式化的新值。</param>
-    private static void ReplaceMappedText(
-        ParagraphTextMap map,
-        TextLocator locator,
-        string replacementValue)
-    {
-        int targetEnd = locator.StartOffset + locator.Length;
-        List<TextSegment> affected = map.Segments
-            .Where(segment =>
-                segment.StartOffset < targetEnd &&
-                segment.EndOffset > locator.StartOffset)
-            .ToList();
-        if (affected.Count == 0)
-        {
-            throw new LocatorNotFoundException(locator.OriginalValue);
-        }
-
-        for (int index = 0; index < affected.Count; index++)
-        {
-            TextSegment segment = affected[index];
-            string originalNodeText = segment.TextNode.Text ?? string.Empty;
-            int localStart = Math.Max(0, locator.StartOffset - segment.StartOffset);
-            int localEnd = Math.Min(segment.Length, targetEnd - segment.StartOffset);
-            string prefix = originalNodeText[..localStart];
-            string suffix = originalNodeText[localEnd..];
-
-            if (index == 0)
-            {
-                // 新值写入首个相关 Text 节点，使其继承首个 Run 的字体、字号和强调格式。
-                segment.TextNode.Text = prefix + replacementValue +
-                    (affected.Count == 1 ? suffix : string.Empty);
-            }
-            else if (index == affected.Count - 1)
-            {
-                // 最后节点仅保留目标范围之后的原始文本，不删除所属 Run 或其他 XML。
-                segment.TextNode.Text = suffix;
-            }
-            else
-            {
-                segment.TextNode.Text = prefix + suffix;
-            }
-
-            OpenXmlDocumentHelpers.PreserveBoundaryWhitespace(segment.TextNode);
-        }
-    }
-
-    /// <summary>
     /// 根据模板文件名生成不含路径和非法字符的下载文件名。
     /// </summary>
     /// <param name="originalFileName">模板原始文件名。</param>
@@ -364,17 +193,4 @@ public sealed class WordReportRenderer : IWordReportRenderer
         MockDataItem MockItem,
         string FormattedValue);
 
-    /// <summary>
-    /// 表示用于批量定位替换的文档部件键。
-    /// </summary>
-    private sealed record DocumentPartLocatorKey(
-        DocumentPartKind PartKind,
-        string PartKey);
-
-    /// <summary>
-    /// 表示一个已解析的可写文本部件。
-    /// </summary>
-    private sealed record DocumentPartContext(
-        IReadOnlyList<Paragraph> Paragraphs,
-        Action Save);
 }

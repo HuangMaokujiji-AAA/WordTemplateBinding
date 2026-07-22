@@ -43,19 +43,28 @@ internal static class TestServiceFactory
         new WordReportRenderer(new DataValueFormatter(), CreateOptions());
 
     /// <summary>
+    /// 创建默认可复用模板渲染器。
+    /// </summary>
+    /// <returns>返回复用模板渲染器实例。</returns>
+    internal static IWordReusableTemplateRenderer CreateReusableTemplateRenderer() =>
+        new WordReusableTemplateRenderer(CreateOptions());
+
+    /// <summary>
     /// 根据 DOCX 字节和扫描结果创建模板领域对象。
     /// </summary>
     /// <param name="bytes">原始 DOCX 字节。</param>
     /// <param name="scanResult">扫描结果。</param>
+    /// <param name="fileName">测试模板文件名。</param>
     /// <returns>返回模板对象。</returns>
     internal static TemplateDocument CreateTemplate(
         byte[] bytes,
-        TemplateScanResult scanResult)
+        TemplateScanResult scanResult,
+        string fileName = "template.docx")
     {
         DateTimeOffset now = new(2026, 7, 17, 0, 0, 0, TimeSpan.Zero);
         return new TemplateDocument(
             Guid.NewGuid(),
-            "template.docx",
+            fileName,
             bytes,
             scanResult.ContentHash,
             scanResult,

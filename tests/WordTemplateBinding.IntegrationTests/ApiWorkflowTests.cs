@@ -168,16 +168,180 @@ public sealed class ApiWorkflowTests : IClassFixture<WebApplicationFactory<Progr
     }
 
     /// <summary>
+    /// 验证文本绑定可导出、重新上传自动恢复并直接生成最终报告。
+    /// </summary>
+    [Fact]
+    public async Task ReusableTemplate_TextRoundTrip_RestoresAndGeneratesReport()
+    {
+        using JsonDocument firstUpload = await UploadTemplateAsync(
+            TestDocumentFactory.Create("平均成绩为 88.5 分。"),
+            "成绩报告.docx");
+        Guid firstTemplateId = firstUpload.RootElement.GetProperty("templateId").GetGuid();
+        string firstLocatorId = firstUpload.RootElement
+            .GetProperty("mockItems")[0]
+            .GetProperty("locatorId")
+            .GetString()!;
+        HttpResponseMessage bindingResponse = await _client.PostAsJsonAsync(
+            "/api/bindings",
+            new
+            {
+                templateId = firstTemplateId,
+                locatorId = firstLocatorId,
+                dataPath = "StudentStatistics.AverageScore",
+            });
+        bindingResponse.EnsureSuccessStatusCode();
+
+        HttpResponseMessage exportResponse = await _client.PostAsync(
+            $"/api/templates/{firstTemplateId}/export-reusable",
+            null);
+        byte[] reusableBytes = await exportResponse.Content.ReadAsByteArrayAsync();
+
+        Assert.Equal(HttpStatusCode.OK, exportResponse.StatusCode);
+        Assert.Equal(DocxContentType, exportResponse.Content.Headers.ContentType?.MediaType);
+        Assert.Equal(
+            "成绩报告-template.docx",
+            exportResponse.Content.Headers.ContentDisposition?.FileNameStar);
+        Assert.Contains(
+            "{{StudentStatistics.AverageScore}}",
+            TestDocumentFactory.ReadBodyText(reusableBytes),
+            StringComparison.Ordinal);
+
+        using JsonDocument secondUpload = await UploadTemplateAsync(
+            reusableBytes,
+            "成绩报告-template.docx");
+        JsonElement secondRoot = secondUpload.RootElement;
+        Guid secondTemplateId = secondRoot.GetProperty("templateId").GetGuid();
+        JsonElement restoredItem = secondRoot.GetProperty("mockItems")[0];
+        JsonElement importSummary = secondRoot.GetProperty("importSummary");
+
+        Assert.NotEqual(firstLocatorId, restoredItem.GetProperty("locatorId").GetString());
+        Assert.True(restoredItem.GetProperty("isBound").GetBoolean());
+        Assert.Equal(
+            "StudentStatistics.AverageScore",
+            restoredItem.GetProperty("boundDataPath").GetString());
+        Assert.Equal(1, importSummary.GetProperty("textBindingsRestored").GetInt32());
+
+        HttpResponseMessage reportResponse = await _client.PostAsJsonAsync(
+            "/api/reports/generate",
+            new
+            {
+                templateId = secondTemplateId,
+                values = new Dictionary<string, decimal>
+                {
+                    ["StudentStatistics.AverageScore"] = 92.3m,
+                },
+            });
+        byte[] reportBytes = await reportResponse.Content.ReadAsByteArrayAsync();
+
+        Assert.Equal(HttpStatusCode.OK, reportResponse.StatusCode);
+        Assert.Contains("92.3", TestDocumentFactory.ReadBodyText(reportBytes), StringComparison.Ordinal);
+        Assert.DoesNotContain("{{", TestDocumentFactory.ReadBodyText(reportBytes), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// 验证图表绑定通过 Manifest 往返，图表本体导出时不被修改。
+    /// </summary>
+    [Fact]
+    public async Task ReusableTemplate_ChartRoundTrip_RestoresAndGeneratesReport()
+    {
+        byte[] source = TestDocumentFactory.CreateChartDocument();
+        string sourceChartXml = TestDocumentFactory.ReadFirstChartXml(source);
+        using JsonDocument firstUpload = await UploadTemplateAsync(source, "图表报告.docx");
+        Guid firstTemplateId = firstUpload.RootElement.GetProperty("templateId").GetGuid();
+        string firstChartLocator = firstUpload.RootElement
+            .GetProperty("charts")[0]
+            .GetProperty("locatorId")
+            .GetString()!;
+        HttpResponseMessage bindingResponse = await _client.PostAsJsonAsync(
+            "/api/bindings",
+            new
+            {
+                templateId = firstTemplateId,
+                locatorId = firstChartLocator,
+                dataPath = "ChartData.ScienceScores",
+            });
+        bindingResponse.EnsureSuccessStatusCode();
+
+        HttpResponseMessage exportResponse = await _client.PostAsync(
+            $"/api/templates/{firstTemplateId}/export-reusable",
+            null);
+        byte[] reusableBytes = await exportResponse.Content.ReadAsByteArrayAsync();
+
+        Assert.Equal(HttpStatusCode.OK, exportResponse.StatusCode);
+        Assert.Equal(sourceChartXml, TestDocumentFactory.ReadFirstChartXml(reusableBytes));
+        Assert.Contains(
+            "ChartData.ScienceScores",
+            TestDocumentFactory.ReadBindingManifest(reusableBytes),
+            StringComparison.Ordinal);
+
+        using JsonDocument secondUpload = await UploadTemplateAsync(
+            reusableBytes,
+            "图表报告-template.docx");
+        Guid secondTemplateId = secondUpload.RootElement.GetProperty("templateId").GetGuid();
+        JsonElement restoredChart = secondUpload.RootElement.GetProperty("charts")[0];
+
+        Assert.True(restoredChart.GetProperty("isBound").GetBoolean());
+        Assert.Equal(
+            "ChartData.ScienceScores",
+            restoredChart.GetProperty("boundDataPath").GetString());
+        Assert.Equal(
+            1,
+            secondUpload.RootElement.GetProperty("importSummary")
+                .GetProperty("chartBindingsRestored")
+                .GetInt32());
+
+        HttpResponseMessage reportResponse = await _client.PostAsJsonAsync(
+            "/api/reports/generate",
+            new { templateId = secondTemplateId });
+        byte[] reportBytes = await reportResponse.Content.ReadAsByteArrayAsync();
+        IReadOnlyList<IReadOnlyList<decimal>> values =
+            TestDocumentFactory.ReadChartValues(reportBytes);
+
+        Assert.Equal(HttpStatusCode.OK, reportResponse.StatusCode);
+        Assert.Equal(new[] { 552m, 518m }, values[0]);
+        Assert.Equal(new[] { 506m, 493m }, values[1]);
+    }
+
+    /// <summary>
+    /// 验证没有绑定时复用模板导出返回统一 ProblemDetails。
+    /// </summary>
+    [Fact]
+    public async Task ExportReusable_WithoutBindings_ReturnsConflictProblemDetails()
+    {
+        using JsonDocument upload = await UploadTemplateAsync("平均成绩 88.5");
+        Guid templateId = upload.RootElement.GetProperty("templateId").GetGuid();
+
+        HttpResponseMessage response = await _client.PostAsync(
+            $"/api/templates/{templateId}/export-reusable",
+            null);
+        using JsonDocument problem = JsonDocument.Parse(
+            await response.Content.ReadAsStringAsync());
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal(
+            "empty_reusable_template_bindings",
+            problem.RootElement.GetProperty("errorCode").GetString());
+    }
+
+    /// <summary>
     /// 上传一个测试模板并返回 JSON 文档。
     /// </summary>
     /// <param name="text">测试模板正文文本。</param>
     /// <returns>返回上传接口 JSON 响应。</returns>
     private async Task<JsonDocument> UploadTemplateAsync(string text)
     {
+        return await UploadTemplateAsync(TestDocumentFactory.Create(text), "template.docx");
+    }
+
+    /// <summary>
+    /// 上传指定 DOCX 字节并返回 JSON 文档。
+    /// </summary>
+    private async Task<JsonDocument> UploadTemplateAsync(byte[] bytes, string fileName)
+    {
         using MultipartFormDataContent form = new();
-        ByteArrayContent file = new(TestDocumentFactory.Create(text));
+        ByteArrayContent file = new(bytes);
         file.Headers.ContentType = new MediaTypeHeaderValue(DocxContentType);
-        form.Add(file, "file", "template.docx");
+        form.Add(file, "file", fileName);
 
         HttpResponseMessage response = await _client.PostAsync("/api/templates/upload", form);
         response.EnsureSuccessStatusCode();

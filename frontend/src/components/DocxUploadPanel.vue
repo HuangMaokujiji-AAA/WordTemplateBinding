@@ -6,6 +6,7 @@ const emit = defineEmits<{
   (e: "load-sample"): void;
   (e: "clear"): void;
   (e: "rescan"): void;
+  (e: "export-reusable"): void;
   (e: "generate"): void;
 }>();
 
@@ -95,6 +96,14 @@ function triggerFileInput() {
           :disabled="loading || !hasTemplate"
         >
           重新扫描
+        </button>
+
+        <button
+          class="btn btn--template"
+          @click="$emit('export-reusable')"
+          :disabled="loading || !hasTemplate || bindingCount === 0"
+        >
+          导出复用模板
         </button>
 
         <button
@@ -293,6 +302,15 @@ function triggerFileInput() {
 
 .btn--success:hover:not(:disabled) {
   background: #0f6a4b;
+}
+
+.btn--template {
+  background: #8b5a2b;
+  color: white;
+}
+
+.btn--template:hover:not(:disabled) {
+  background: #74491f;
 }
 
 .btn--ghost {

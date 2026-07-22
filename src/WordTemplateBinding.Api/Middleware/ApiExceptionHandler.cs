@@ -100,7 +100,8 @@ public sealed class ApiExceptionHandler
                     "资源不存在",
                     business.ErrorCode,
                     business.Message),
-            BindingValidationException or EmptyBindingsException
+            BindingValidationException or EmptyBindingsException or
+                EmptyReusableTemplateBindingsException or ReusableTemplateRenderingException
                 when exception is WordTemplateBindingException business => (
                     StatusCodes.Status409Conflict,
                     "当前状态不允许该操作",

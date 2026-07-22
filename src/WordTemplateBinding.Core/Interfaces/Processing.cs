@@ -119,6 +119,40 @@ public interface ILocatorIdGenerator
 }
 
 /// <summary>
+/// 定义从已绑定模板导出可重复使用 DOCX 模板的能力。
+/// </summary>
+public interface IWordReusableTemplateRenderer
+{
+    /// <summary>
+    /// 将文本绑定写成字段路径占位符，并将图表绑定写入内嵌清单。
+    /// </summary>
+    /// <param name="template">原始模板快照。</param>
+    /// <param name="bindings">当前绑定关系。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>返回独立的可复用 DOCX 模板。</returns>
+    Task<RenderedTemplate> RenderAsync(
+        TemplateDocument template,
+        IReadOnlyCollection<TemplateBinding> bindings,
+        CancellationToken cancellationToken = default);
+}
+
+/// <summary>
+/// 定义根据显式占位符和图表清单恢复绑定关系的能力。
+/// </summary>
+public interface ITemplateAutoBindingResolver
+{
+    /// <summary>
+    /// 为扫描完成的模板恢复当前 Schema 中仍然有效的绑定。
+    /// </summary>
+    /// <param name="template">已经保存并具有新 Locator 的模板。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>返回本次恢复摘要与非阻断警告。</returns>
+    Task<TemplateImportSummary> ResolveAsync(
+        TemplateDocument template,
+        CancellationToken cancellationToken = default);
+}
+
+/// <summary>
 /// 定义从扫描结果构建文档预览的能力。
 /// </summary>
 public interface IDocumentPreviewBuilder

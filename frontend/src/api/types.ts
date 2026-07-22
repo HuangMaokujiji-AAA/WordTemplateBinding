@@ -89,8 +89,16 @@ export interface TemplateResponse {
   mockItems: MockItem[];
   charts: ChartItem[];
   preview: { paragraphs: PreviewParagraph[] };
+  importSummary: TemplateImportSummary;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface TemplateImportSummary {
+  textBindingsRestored: number;
+  chartBindingsRestored: number;
+  unresolvedPlaceholders: string[];
+  warnings: string[];
 }
 
 export interface DataFieldNode {

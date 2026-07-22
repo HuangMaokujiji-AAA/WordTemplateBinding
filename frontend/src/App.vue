@@ -10,6 +10,7 @@ import {
 import {
   deleteBinding,
   downloadReport,
+  downloadReusableTemplate,
   getSchema,
   getTemplate,
   rescanTemplate,
@@ -44,6 +45,7 @@ import {
   focusChartTarget,
   refreshChartBindingTargetStates,
 } from "./features/binding/renderedChartBindings";
+import { formatImportSummary } from "./features/binding/importSummaryStatus";
 
 type WorkspaceTab = "schema" | "bindings" | "properties";
 
@@ -227,7 +229,11 @@ async function handleFileSelected(file: File): Promise<void> {
       ? `，${unresolvedCount} 项需从左侧列表选择`
       : "";
     setStatus(
-      `已识别 ${template.value.mockItemCount} 个模拟值和 ${template.value.chartCount} 个图表，网页已定位 ${decoration.renderedCount + chartDecoration.renderedCount} 项${unresolvedNote}`
+      buildUploadStatus(
+        template.value,
+        decoration.renderedCount + chartDecoration.renderedCount,
+        unresolvedNote
+      )
     );
   } catch (error) {
     if (taskId === renderTaskId) {
@@ -266,7 +272,9 @@ async function handleRescan(): Promise<void> {
     template.value = await rescanTemplate(template.value!.templateId);
     syncSelection();
     refreshRenderedBindings();
-    setStatus("重新扫描完成，原始模板未被修改。");
+    setStatus(
+      `重新扫描完成，原始模板未被修改${formatImportSummary(template.value.importSummary)}。`
+    );
   });
 }
 
@@ -277,6 +285,26 @@ async function handleGenerate(): Promise<void> {
     const generatedName = await downloadReport(template.value!.templateId);
     setStatus(`报告已生成：${generatedName}`);
   });
+}
+
+async function handleExportReusable(): Promise<void> {
+  if (!template.value) return;
+
+  await runAction("正在生成可复用绑定模板…", async () => {
+    const exportedName = await downloadReusableTemplate(
+      template.value!.templateId
+    );
+    setStatus(`复用模板已导出：${exportedName}`);
+  });
+}
+
+function buildUploadStatus(
+  currentTemplate: TemplateResponse,
+  renderedCount: number,
+  unresolvedPreviewNote: string
+): string {
+  const summary = currentTemplate.importSummary;
+  return `已识别 ${currentTemplate.mockItemCount} 个模拟值和 ${currentTemplate.chartCount} 个图表，网页已定位 ${renderedCount} 项${formatImportSummary(summary)}${unresolvedPreviewNote}`;
 }
 
 async function bindField(
@@ -461,6 +489,7 @@ function partLabel(item: MockItem): string {
       @load-sample="handleLoadSample"
       @clear="handleClear"
       @rescan="handleRescan"
+      @export-reusable="handleExportReusable"
       @generate="handleGenerate"
     />
 

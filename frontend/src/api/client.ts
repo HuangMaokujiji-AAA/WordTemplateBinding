@@ -89,14 +89,36 @@ export function deleteBinding(
 }
 
 export async function downloadReport(templateId: string): Promise<string> {
-  const response = await fetch("/api/reports/generate", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ templateId }),
-  });
+  return downloadDocx(
+    "/api/reports/generate",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ templateId }),
+    },
+    "report_generated.docx"
+  );
+}
+
+export async function downloadReusableTemplate(
+  templateId: string
+): Promise<string> {
+  return downloadDocx(
+    `/api/templates/${encodeURIComponent(templateId)}/export-reusable`,
+    { method: "POST" },
+    "template-template.docx"
+  );
+}
+
+async function downloadDocx(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  fallbackFileName: string
+): Promise<string> {
+  const response = await fetch(input, init);
 
   if (!response.ok) {
-    await parseError(response);
+    return parseError(response);
   }
 
   const contentType = response.headers.get("content-type") || "";
@@ -106,32 +128,42 @@ export async function downloadReport(templateId: string): Promise<string> {
 
   const blob = await response.blob();
   const fileName = getDownloadFileName(
-    response.headers.get("content-disposition")
+    response.headers.get("content-disposition"),
+    fallbackFileName
   );
   const objectUrl = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
-  anchor.href = objectUrl;
-  anchor.download = fileName;
-  document.body.append(anchor);
-  anchor.click();
-  anchor.remove();
-  URL.revokeObjectURL(objectUrl);
+  try {
+    anchor.href = objectUrl;
+    anchor.download = fileName;
+    document.body.append(anchor);
+    anchor.click();
+  } finally {
+    anchor.remove();
+    URL.revokeObjectURL(objectUrl);
+  }
   return fileName;
 }
 
-function getDownloadFileName(contentDisposition: string | null): string {
+function getDownloadFileName(
+  contentDisposition: string | null,
+  fallbackFileName: string
+): string {
   if (!contentDisposition) {
-    return "report_generated.docx";
+    return fallbackFileName;
   }
 
   const utf8Match = /filename\*=UTF-8''([^;]+)/i.exec(contentDisposition);
   if (utf8Match) {
-    return decodeURIComponent(utf8Match[1]);
+    try {
+      return decodeURIComponent(utf8Match[1].replace(/^"|"$/g, ""));
+    } catch {
+      return fallbackFileName;
+    }
   }
 
   const plainMatch = /filename="?([^";]+)"?/i.exec(contentDisposition);
-  return plainMatch?.[1] || "report_generated.docx";
+  return plainMatch?.[1] || fallbackFileName;
 }
 
 export type { DataFieldNode };
-

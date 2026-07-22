@@ -77,4 +77,9 @@ public sealed record RecognizedMockData
     /// 获取候选模拟数据类型。
     /// </summary>
     public required MockDataType DataType { get; init; }
+
+    /// <summary>
+    /// 获取显式双花括号标记内部的候选字段路径。
+    /// </summary>
+    public string? PlaceholderCandidatePath { get; init; }
 }

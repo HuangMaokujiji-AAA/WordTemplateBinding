@@ -46,6 +46,12 @@ public sealed record MockDataItem
     /// 获取当前响应视图中绑定的数据字段路径。
     /// </summary>
     public string? BoundDataPath { get; init; }
+
+    /// <summary>
+    /// 获取显式双花括号标记中可用于 Schema 精确查找的候选路径。
+    /// 普通数字识别结果为 <see langword="null"/>。
+    /// </summary>
+    public string? PlaceholderCandidatePath { get; init; }
 }
 
 /// <summary>
@@ -72,6 +78,11 @@ public sealed record TemplateScanResult
     /// 获取结构化文本预览。
     /// </summary>
     public required DocumentPreview Preview { get; init; }
+
+    /// <summary>
+    /// 获取从本系统自定义 XML 部件读取的复用模板清单。
+    /// </summary>
+    public ReusableTemplateManifest BindingManifest { get; init; } = new();
 }
 
 /// <summary>
@@ -91,6 +102,7 @@ public sealed class TemplateDocument
     /// <param name="scanResult">模板扫描结果。</param>
     /// <param name="createdAt">创建时间。</param>
     /// <param name="updatedAt">更新时间。</param>
+    /// <param name="importSummary">最近一次自动恢复摘要。</param>
     public TemplateDocument(
         Guid id,
         string originalFileName,
@@ -98,7 +110,8 @@ public sealed class TemplateDocument
         string contentHash,
         TemplateScanResult scanResult,
         DateTimeOffset createdAt,
-        DateTimeOffset updatedAt)
+        DateTimeOffset updatedAt,
+        TemplateImportSummary? importSummary = null)
     {
         Id = id;
         OriginalFileName = originalFileName;
@@ -107,6 +120,7 @@ public sealed class TemplateDocument
         ScanResult = scanResult;
         CreatedAt = createdAt;
         UpdatedAt = updatedAt;
+        ImportSummary = importSummary ?? TemplateImportSummary.Empty;
     }
 
     /// <summary>
@@ -140,6 +154,11 @@ public sealed class TemplateDocument
     public DateTimeOffset UpdatedAt { get; private set; }
 
     /// <summary>
+    /// 获取最近一次上传或重新扫描产生的自动绑定恢复摘要。
+    /// </summary>
+    public TemplateImportSummary ImportSummary { get; private set; }
+
+    /// <summary>
     /// 返回原始模板字节的安全副本。
     /// </summary>
     /// <returns>返回新的字节数组，调用方修改该数组不会影响模板。</returns>
@@ -157,6 +176,15 @@ public sealed class TemplateDocument
     }
 
     /// <summary>
+    /// 更新最近一次自动绑定恢复摘要。
+    /// </summary>
+    /// <param name="importSummary">恢复摘要。</param>
+    public void UpdateImportSummary(TemplateImportSummary importSummary)
+    {
+        ImportSummary = importSummary;
+    }
+
+    /// <summary>
     /// 创建包含独立字节数组的模板快照。
     /// </summary>
     /// <returns>返回可安全交给调用方的模板副本。</returns>
@@ -168,7 +196,8 @@ public sealed class TemplateDocument
             ContentHash,
             ScanResult,
             CreatedAt,
-            UpdatedAt);
+            UpdatedAt,
+            ImportSummary);
 }
 
 /// <summary>
