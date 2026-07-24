@@ -24,6 +24,10 @@ public sealed class IntegerNumberRecognizer : IMockDataRecognizer
     }
 
     /// <inheritdoc />
+    public MockDataRecognitionPriority Priority =>
+        MockDataRecognitionPriority.AutomaticRegex;
+
+    /// <inheritdoc />
     public IReadOnlyList<RecognizedMockData> Recognize(ParagraphTextMap paragraph)
     {
         List<RecognizedMockData> recognized = new();

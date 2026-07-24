@@ -384,6 +384,9 @@ async function bindField(
   const targetChart = template.value.charts.find(
     (chart) => chart.locatorId === locatorId
   );
+  const targetItem = template.value.mockItems.find(
+    (item) => item.locatorId === locatorId
+  );
   if (targetChart && !targetChart.isBindable) {
     setStatus("该图表没有可写的数据系列缓存。", true);
     return;
@@ -397,13 +400,25 @@ async function bindField(
     return;
   }
 
-  await runAction(`正在绑定 ${field.path}…`, async () => {
+  const previousDataPath =
+    targetChart?.boundDataPath || targetItem?.boundDataPath || null;
+  const isRebinding =
+    previousDataPath !== null && previousDataPath !== field.path;
+  const progressMessage = isRebinding
+    ? `正在将绑定从 ${previousDataPath} 修改为 ${field.path}…`
+    : `正在绑定 ${field.path}…`;
+
+  await runAction(progressMessage, async () => {
     await upsertBinding(template.value!.templateId, locatorId, field.path);
     template.value = await getTemplate(template.value!.templateId);
     selectedLocatorId.value = locatorId;
     activeTab.value = "properties";
     refreshRenderedBindings();
-    setStatus(`已绑定字段：${field.path}`);
+    setStatus(
+      isRebinding
+        ? `已将绑定从 ${previousDataPath} 修改为 ${field.path}`
+        : `已绑定字段：${field.path}`
+    );
   });
 }
 
@@ -677,7 +692,7 @@ function partLabel(item: MockItem): string {
           </label>
           <p class="small-note">{{ schemaSummary }}</p>
           <p class="binding-hint">
-            标量字段绑定黄色/紫色文本；集合字段绑定橙色图表区域。也可以直接拖拽字段。
+            标量字段绑定黄色/紫色文本；集合字段绑定橙色图表区域。将新字段拖到已绑定目标可直接改绑，无需先取消。
           </p>
           <div class="schema-tree">
             <SchemaTreeNode

@@ -41,7 +41,9 @@ export function decorateRenderedCharts(
     target.addEventListener("dragover", (event) => {
       if (!event.dataTransfer?.types.includes(FIELD_MIME_TYPE)) return;
       event.preventDefault();
-      event.dataTransfer.dropEffect = "copy";
+      event.dataTransfer.dropEffect = target.classList.contains("is-bound")
+        ? "link"
+        : "copy";
       target.classList.add("is-drag-over");
     });
     target.addEventListener("dragleave", () => {
@@ -87,7 +89,7 @@ export function refreshChartBindingTargetStates(
     const chart = chartsById.get(target.dataset.chartLocatorId ?? "");
     target.classList.toggle("is-bound", Boolean(chart?.isBound));
     target.title = chart?.isBound
-      ? `图表已绑定：${chart.boundDataPath}`
+      ? `图表已绑定：${chart.boundDataPath}；拖入其他集合字段可直接改绑`
       : chart?.isBindable
         ? `图表：${chart.title}（可拖入集合字段）`
         : `图表：${chart?.title ?? "未命名"}（没有可写数据缓存）`;

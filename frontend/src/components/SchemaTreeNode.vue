@@ -39,7 +39,7 @@ function handleDragStart(event: DragEvent): void {
     return;
   }
 
-  event.dataTransfer.effectAllowed = "copy";
+  event.dataTransfer.effectAllowed = "copyLink";
   event.dataTransfer.setData(FIELD_MIME_TYPE, JSON.stringify(props.node));
 }
 </script>
@@ -66,8 +66,8 @@ function handleDragStart(event: DragEvent): void {
         :title="
           node.isBindable
             ? node.type === 'Array'
-              ? '点击绑定到当前选中图表，或拖拽到图表区域'
-              : '点击绑定到当前选中值，或拖拽到文档高亮处'
+              ? '点击绑定到当前选中图表，或拖拽到图表区域；拖到已绑定图表可直接改绑'
+              : '点击绑定到当前选中值，或拖拽到文档高亮处；拖到已绑定高亮可直接改绑'
             : node.isLeaf
               ? '该字段当前不可绑定'
               : '展开字段分组'

@@ -34,6 +34,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IDataValueFormatter, DataValueFormatter>();
         services.AddSingleton<IMockDataRecognizer, DecimalNumberRecognizer>();
         services.AddSingleton<IMockDataRecognizer, IntegerNumberRecognizer>();
+        services.AddSingleton<IMockDataRecognizer, YellowHighlightRecognizer>();
         services.AddSingleton<IMockDataRecognizer, ExplicitTextRecognizer>();
         services.AddSingleton<IWordTemplateScanner, WordTemplateScanner>();
         services.AddSingleton<ITemplateAutoBindingResolver, TemplateAutoBindingResolver>();

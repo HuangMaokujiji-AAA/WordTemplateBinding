@@ -6,19 +6,6 @@ using WordTemplateBinding.Core.Options;
 namespace WordTemplateBinding.Infrastructure.OpenXml;
 
 /// <summary>
-/// 定义针对段落拼接文本的模拟数据识别器。
-/// </summary>
-public interface IMockDataRecognizer
-{
-    /// <summary>
-    /// 在段落文本映射中识别当前实现支持的模拟数据。
-    /// </summary>
-    /// <param name="paragraph">段落文本映射。</param>
-    /// <returns>返回按起始偏移排列的识别结果。</returns>
-    IReadOnlyList<RecognizedMockData> Recognize(ParagraphTextMap paragraph);
-}
-
-/// <summary>
 /// 使用可配置正则表达式识别小数型模拟数据。
 /// </summary>
 public sealed class DecimalNumberRecognizer : IMockDataRecognizer
@@ -35,6 +22,10 @@ public sealed class DecimalNumberRecognizer : IMockDataRecognizer
             options.MockNumberPattern,
             options.RegexTimeoutMilliseconds);
     }
+
+    /// <inheritdoc />
+    public MockDataRecognitionPriority Priority =>
+        MockDataRecognitionPriority.AutomaticRegex;
 
     /// <inheritdoc />
     public IReadOnlyList<RecognizedMockData> Recognize(ParagraphTextMap paragraph)

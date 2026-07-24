@@ -107,7 +107,9 @@ Content-Type: multipart/form-data
 }
 ```
 
-`mockItems[].dataType` 可能为 `Decimal`、`Integer` 或 `String`。文字使用 `{{text:示例文字}}` 显式标记；此时 `mockValue` 为内部文字，`locator.originalValue` 为包含标记语法的完整原文，生成报告时会替换整个标记。
+`mockItems[].dataType` 可能为 `Decimal`、`Integer` 或 `String`。Word 中使用标准黄色文本高亮标记的连续范围会优先成为一个候选；完整匹配数值规则时类型为 `Decimal` 或 `Integer`，否则为 `String`。文字也可使用 `{{text:示例文字}}` 显式标记；此时 `mockValue` 为内部文字，`locator.originalValue` 为包含标记语法的完整原文，生成报告时会替换整个标记。
+
+候选冲突优先级为：双花括号显式标记 > 黄色高亮 > 小数/整数正则。任何较低优先级候选只要与已选范围相交就会丢弃，因此 API 不会返回重叠的 `mockItems`。
 
 `charts[]` 表示主文档中的 Word 原生 ChartPart。图表只能绑定 `Array` 集合字段。
 
@@ -333,6 +335,7 @@ POST /api/templates/{templateId}/export-reusable
 请求体为空，也不接收任何真实数据值。后端从不可变原始 DOCX 字节创建副本：
 
 - 文本绑定写为 `{{binding.DataPath}}`；
+- 文本绑定范围原有的黄色高亮会被移除，其他字符格式保持不变；
 - 未绑定模拟值保持原样；
 - 图表本体、类型、样式、分类和系列缓存保持不变；
 - 图表绑定写入命名空间为 `urn:word-template-binding:bindings:v1`、版本为 `1` 的 CustomXmlPart；

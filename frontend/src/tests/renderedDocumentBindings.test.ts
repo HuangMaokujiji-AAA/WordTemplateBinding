@@ -12,6 +12,7 @@ function createMockItem(overrides: Partial<MockItem> = {}): MockItem {
     dataType: "Decimal",
     paragraphText: "得分 88.5 分",
     previewParagraphIndex: 0,
+    placeholderCandidatePath: null,
     isBound: false,
     boundDataPath: null,
     boundDataType: null,
@@ -77,6 +78,112 @@ describe("decorateRenderedDocument", () => {
     );
     expect(target?.classList.contains("is-bound")).toBe(true);
     expect(target?.title).toContain("StudentStatistics.AverageScore");
+    expect(target?.title).toContain("可直接改绑");
+  });
+
+  it("shows the latest data path after a reusable placeholder is rebound", () => {
+    const container = document.createElement("div");
+    container.innerHTML = "<p><span>{{Report.</span><span>Title}}</span></p>";
+    const item = createMockItem({
+      mockValue: "Report.Title",
+      paragraphText: "{{Report.Title}}",
+      placeholderCandidatePath: "Report.Title",
+      isBound: true,
+      boundDataPath: "Report.Title",
+      boundDataType: "String",
+      locator: {
+        partKind: "MainDocument",
+        partKey: "/word/document.xml",
+        paragraphIndex: 0,
+        startOffset: 0,
+        length: 16,
+        occurrenceIndex: 0,
+        originalValue: "{{Report.Title}}",
+        contextHash: "placeholder-hash",
+      },
+    });
+    decorateRenderedDocument(container, [item], {
+      onSelect: vi.fn(),
+      onBind: vi.fn(),
+      onError: vi.fn(),
+    });
+
+    const reboundItem = {
+      ...item,
+      boundDataPath: "Report.Str1",
+    };
+    refreshBindingTargetStates(container, [reboundItem]);
+
+    const target = container.querySelector<HTMLElement>(
+      ".template-binding-target"
+    );
+    expect(target?.textContent).toBe("{{Report.Str1}}");
+    expect(target?.dataset.boundDataPath).toBe("Report.Str1");
+    expect(target?.querySelectorAll("span")).toHaveLength(2);
+
+    refreshBindingTargetStates(container, [
+      { ...reboundItem, isBound: false, boundDataPath: null, boundDataType: null },
+    ]);
+    expect(target?.textContent).toBe("{{Report.Title}}");
+    expect(target?.dataset.boundDataPath).toBeUndefined();
+  });
+
+  it("drops a new field directly onto an already bound target", () => {
+    const container = document.createElement("div");
+    container.innerHTML = "<p>{{Report.Title}}</p>";
+    const item = createMockItem({
+      mockValue: "Report.Title",
+      paragraphText: "{{Report.Title}}",
+      placeholderCandidatePath: "Report.Title",
+      isBound: true,
+      boundDataPath: "Report.Title",
+      boundDataType: "String",
+      locator: {
+        partKind: "MainDocument",
+        partKey: "/word/document.xml",
+        paragraphIndex: 0,
+        startOffset: 0,
+        length: 16,
+        occurrenceIndex: 0,
+        originalValue: "{{Report.Title}}",
+        contextHash: "placeholder-hash",
+      },
+    });
+    const onBind = vi.fn();
+    decorateRenderedDocument(container, [item], {
+      onSelect: vi.fn(),
+      onBind,
+      onError: vi.fn(),
+    });
+
+    const field = {
+      name: "Str1",
+      path: "Report.Str1",
+      type: "String" as const,
+      isCollection: false,
+      isLeaf: true,
+      isBindable: true,
+      children: [],
+    };
+    const dropEvent = new Event("drop", {
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(dropEvent, "dataTransfer", {
+      value: {
+        getData: (mimeType: string) =>
+          mimeType === "application/x-word-template-field"
+            ? JSON.stringify(field)
+            : "",
+      },
+    });
+
+    container
+      .querySelector<HTMLElement>(".template-binding-target")
+      ?.dispatchEvent(dropEvent);
+
+    expect(dropEvent.defaultPrevented).toBe(true);
+    expect(onBind).toHaveBeenCalledWith(item.locatorId, field);
   });
 
   it("reports locators whose paragraph cannot be mapped", () => {

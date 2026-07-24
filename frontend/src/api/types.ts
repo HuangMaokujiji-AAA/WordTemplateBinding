@@ -36,6 +36,7 @@ export interface MockItem {
   locator: TextLocator;
   paragraphText: string;
   previewParagraphIndex: number;
+  placeholderCandidatePath: string | null;
   isBound: boolean;
   boundDataPath: string | null;
   boundDataType: DataValueType | null;

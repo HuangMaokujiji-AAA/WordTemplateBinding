@@ -44,6 +44,63 @@ public sealed class ReusableTemplateRendererTests
     }
 
     /// <summary>
+    /// 验证黄色高亮候选绑定后仍使用标准双花括号字段路径导出。
+    /// </summary>
+    [Fact]
+    public async Task RenderAsync_YellowHighlight_WritesFullPathPlaceholder()
+    {
+        byte[] bytes = OpenXmlTestDocumentFactory.CreateHighlightedParagraphDocument(
+            ("监测年级为", false),
+            ("四", true),
+            ("年级", true),
+            ("。", false));
+        TemplateScanResult scan = await _scanner.ScanAsync(bytes);
+        TemplateDocument template = TestServiceFactory.CreateTemplate(bytes, scan);
+        TemplateBinding binding = CreateBinding(
+            template.Id,
+            Assert.Single(scan.MockItems),
+            "Report.Grade",
+            DataValueType.String);
+
+        RenderedTemplate result = await _renderer.RenderAsync(template, new[] { binding });
+
+        Assert.Equal(
+            "监测年级为{{Report.Grade}}。",
+            OpenXmlTestDocumentFactory.ReadBodyText(result.GetBytesCopy()));
+        Assert.DoesNotContain(
+            OpenXmlTestDocumentFactory.ReadBodyRuns(result.GetBytesCopy()),
+            run => run.RunProperties?.GetFirstChild<Highlight>()?.Val?.Value ==
+                HighlightColorValues.Yellow);
+    }
+
+    /// <summary>
+    /// 验证由黄色高亮导出的占位符重新上传时按显式标记恢复候选字段路径。
+    /// </summary>
+    [Fact]
+    public async Task RenderAsync_YellowHighlight_ReuploadPrefersExplicitPlaceholder()
+    {
+        byte[] bytes = OpenXmlTestDocumentFactory.CreateHighlightedParagraphDocument(
+            ("监测年级为", false),
+            ("四年级", true),
+            ("。", false));
+        TemplateScanResult scan = await _scanner.ScanAsync(bytes);
+        TemplateDocument template = TestServiceFactory.CreateTemplate(bytes, scan);
+        TemplateBinding binding = CreateBinding(
+            template.Id,
+            Assert.Single(scan.MockItems),
+            "Report.Grade",
+            DataValueType.String);
+
+        RenderedTemplate rendered = await _renderer.RenderAsync(template, new[] { binding });
+        TemplateScanResult rescanned = await _scanner.ScanAsync(rendered.GetBytesCopy());
+
+        MockDataItem item = Assert.Single(rescanned.MockItems);
+        Assert.Equal("Report.Grade", item.MockValue);
+        Assert.Equal("Report.Grade", item.PlaceholderCandidatePath);
+        Assert.Equal("{{Report.Grade}}", item.Locator.OriginalValue);
+    }
+
+    /// <summary>
     /// 验证同段多项从后向前替换且未绑定模拟值保持不变。
     /// </summary>
     [Fact]

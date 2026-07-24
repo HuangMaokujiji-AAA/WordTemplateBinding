@@ -146,7 +146,11 @@ public sealed class WordTemplateScanner : IWordTemplateScanner
             paragraphTexts.Add(map.FullText);
 
             List<RecognizedMockData> recognized = ResolveOverlaps(
-                _recognizers.SelectMany(recognizer => recognizer.Recognize(map)));
+                _recognizers.SelectMany(recognizer => recognizer
+                    .Recognize(map)
+                    .Select(item => new PrioritizedRecognition(
+                        item,
+                        recognizer.Priority))));
 
             for (int occurrenceIndex = 0; occurrenceIndex < recognized.Count; occurrenceIndex++)
             {
@@ -189,27 +193,40 @@ public sealed class WordTemplateScanner : IWordTemplateScanner
     /// <param name="candidates">全部候选识别结果。</param>
     /// <returns>返回按起始位置排列的非重叠结果。</returns>
     private static List<RecognizedMockData> ResolveOverlaps(
-        IEnumerable<RecognizedMockData> candidates)
+        IEnumerable<PrioritizedRecognition> candidates)
     {
-        List<RecognizedMockData> selected = new();
-        int selectedEnd = -1;
+        List<PrioritizedRecognition> selected = new();
 
-        // 同一起点优先保留较长范围；显式文字标记因此会覆盖其内部可能出现的数字候选。
-        foreach (RecognizedMockData candidate in candidates
-                     .OrderBy(item => item.StartOffset)
-                     .ThenByDescending(item => item.Length))
+        // 人工意图优先于自动推断；同优先级仍保持原有的“较早起点、同起点较长范围”规则。
+        foreach (PrioritizedRecognition candidate in candidates
+                     .OrderByDescending(item => item.Priority)
+                     .ThenBy(item => item.Item.StartOffset)
+                     .ThenByDescending(item => item.Item.Length))
         {
-            if (candidate.StartOffset < selectedEnd)
+            int candidateEnd = candidate.Item.StartOffset + candidate.Item.Length;
+            bool overlaps = selected.Any(existing =>
+            {
+                int existingEnd = existing.Item.StartOffset + existing.Item.Length;
+                return candidate.Item.StartOffset < existingEnd &&
+                    existing.Item.StartOffset < candidateEnd;
+            });
+            if (overlaps)
             {
                 continue;
             }
 
             selected.Add(candidate);
-            selectedEnd = candidate.StartOffset + candidate.Length;
         }
 
-        return selected;
+        return selected
+            .Select(item => item.Item)
+            .OrderBy(item => item.StartOffset)
+            .ToList();
     }
+
+    private sealed record PrioritizedRecognition(
+        RecognizedMockData Item,
+        MockDataRecognitionPriority Priority);
 
     /// <summary>
     /// 校验文档类型以及主文档正文是否存在。

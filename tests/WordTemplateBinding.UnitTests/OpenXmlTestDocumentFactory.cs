@@ -25,6 +25,24 @@ internal static class OpenXmlTestDocumentFactory
     }
 
     /// <summary>
+    /// 创建只包含一个段落、并按输入声明为部分 Run 添加黄色高亮的 DOCX。
+    /// </summary>
+    /// <param name="runs">Run 文本及其是否使用黄色高亮。</param>
+    /// <returns>返回 DOCX 字节。</returns>
+    internal static byte[] CreateHighlightedParagraphDocument(
+        params (string Text, bool IsHighlighted)[] runs)
+    {
+        Paragraph paragraph = new(runs.Select(run =>
+            run.IsHighlighted
+                ? new Run(
+                    new RunProperties(
+                        new Highlight { Val = HighlightColorValues.Yellow }),
+                    new Text(run.Text))
+                : new Run(new Text(run.Text))));
+        return CreateDocument(paragraph);
+    }
+
+    /// <summary>
     /// 创建包含多个纯文本段落的 DOCX。
     /// </summary>
     /// <param name="paragraphTexts">段落文本。</param>
@@ -288,6 +306,28 @@ internal static class OpenXmlTestDocumentFactory
         Run run = document.MainDocumentPart?.Document?.Body?.Descendants<Run>().First()
             ?? throw new InvalidOperationException("测试文档不包含 Run。");
         return (Run)run.CloneNode(true);
+    }
+
+    /// <summary>
+    /// 读取 DOCX 主文档中的全部 Run。
+    /// </summary>
+    /// <param name="bytes">DOCX 字节。</param>
+    /// <returns>返回全部 Run 的独立克隆。</returns>
+    internal static IReadOnlyList<Run> ReadBodyRuns(byte[] bytes)
+    {
+        using MemoryStream stream = new(bytes, writable: false);
+        using WordprocessingDocument document = WordprocessingDocument.Open(stream, false);
+        Body? body = document.MainDocumentPart?.Document?.Body;
+        if (body is null)
+        {
+            return Array.Empty<Run>();
+        }
+
+        return body
+            .Descendants<Run>()
+            .Select(run => (Run)run.CloneNode(true))
+            .ToList()
+            .AsReadOnly();
     }
 
     /// <summary>

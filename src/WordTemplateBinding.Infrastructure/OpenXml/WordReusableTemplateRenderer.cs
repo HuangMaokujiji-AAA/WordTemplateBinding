@@ -57,7 +57,8 @@ public sealed class WordReusableTemplateRenderer : IWordReusableTemplateRenderer
                         return new OpenXmlTextReplacement(
                             binding.LocatorId,
                             item.Locator,
-                            BuildPlaceholder(binding.DataPath));
+                            BuildPlaceholder(binding.DataPath),
+                            RemoveYellowHighlight: true);
                     })
                     .ToList()
                     .AsReadOnly();

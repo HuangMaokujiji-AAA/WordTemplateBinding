@@ -78,15 +78,17 @@ internal sealed class OpenXmlTextReplacementService
                 foreach (OpenXmlTextReplacement replacement in paragraph.Replacements
                              .OrderByDescending(item => item.Locator.StartOffset))
                 {
-                    if (!string.Equals(
-                            replacement.Locator.OriginalValue,
-                            replacement.ReplacementValue,
-                            StringComparison.Ordinal))
+                    bool textChanged = !string.Equals(
+                        replacement.Locator.OriginalValue,
+                        replacement.ReplacementValue,
+                        StringComparison.Ordinal);
+                    if (textChanged || replacement.RemoveYellowHighlight)
                     {
                         ReplaceMappedText(
                             paragraph.Map,
                             replacement.Locator,
-                            replacement.ReplacementValue);
+                            replacement.ReplacementValue,
+                            replacement.RemoveYellowHighlight);
                     }
                 }
             }
@@ -171,7 +173,8 @@ internal sealed class OpenXmlTextReplacementService
     private static void ReplaceMappedText(
         ParagraphTextMap map,
         TextLocator locator,
-        string replacementValue)
+        string replacementValue,
+        bool removeYellowHighlight)
     {
         int targetEnd = locator.StartOffset + locator.Length;
         List<TextSegment> affected = map.Segments
@@ -208,6 +211,22 @@ internal sealed class OpenXmlTextReplacementService
             }
 
             OpenXmlDocumentHelpers.PreserveBoundaryWhitespace(segment.TextNode);
+            if (removeYellowHighlight)
+            {
+                RemoveYellowHighlight(segment.TextNode);
+            }
+        }
+    }
+
+    private static void RemoveYellowHighlight(Text textNode)
+    {
+        RunProperties? properties = textNode.Ancestors<Run>()
+            .FirstOrDefault()
+            ?.RunProperties;
+        Highlight? highlight = properties?.GetFirstChild<Highlight>();
+        if (highlight?.Val?.Value == HighlightColorValues.Yellow)
+        {
+            highlight.Remove();
         }
     }
 
@@ -234,4 +253,5 @@ internal sealed class OpenXmlTextReplacementService
 internal sealed record OpenXmlTextReplacement(
     string LocatorId,
     TextLocator Locator,
-    string ReplacementValue);
+    string ReplacementValue,
+    bool RemoveYellowHighlight = false);

@@ -114,6 +114,9 @@ public sealed class InMemoryDataSchemaProvider : IDataSchemaProvider
             new[]
             {
                 Leaf("报告标题", "Report.Title", DataValueType.String),
+                Leaf("报告字符1", "Report.Str1", DataValueType.String),
+                Leaf("报告字符2", "Report.Str2", DataValueType.String),
+                Leaf("报告字符3", "Report.Str3", DataValueType.String),           
                 Leaf("报告日期", "Report.GeneratedAt", DataValueType.Date),
                 Leaf("是否定稿", "Report.IsFinal", DataValueType.Boolean),
             });

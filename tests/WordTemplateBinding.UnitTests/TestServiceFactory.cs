@@ -28,6 +28,7 @@ internal static class TestServiceFactory
             {
                 new DecimalNumberRecognizer(options),
                 new IntegerNumberRecognizer(options),
+                new YellowHighlightRecognizer(options),
                 new ExplicitTextRecognizer(options),
             },
             new LocatorIdGenerator(),

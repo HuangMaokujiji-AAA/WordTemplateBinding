@@ -75,6 +75,7 @@ describe("rendered chart bindings", () => {
     const target = container.querySelector<HTMLElement>(".docx-chart-slot")!;
     expect(target.classList.contains("is-bound")).toBe(true);
     expect(target.title).toContain("ChartData.ScienceScores");
+    expect(target.title).toContain("可直接改绑");
   });
 
   it("reports a chart whose part is absent from the rendered preview", () => {

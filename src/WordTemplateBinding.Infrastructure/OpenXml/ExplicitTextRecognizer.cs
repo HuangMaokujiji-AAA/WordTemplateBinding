@@ -28,6 +28,10 @@ public sealed class ExplicitTextRecognizer : IMockDataRecognizer
     }
 
     /// <inheritdoc />
+    public MockDataRecognitionPriority Priority =>
+        MockDataRecognitionPriority.ExplicitMarker;
+
+    /// <inheritdoc />
     public IReadOnlyList<RecognizedMockData> Recognize(ParagraphTextMap paragraph)
     {
         List<RecognizedMockData> recognized = new();

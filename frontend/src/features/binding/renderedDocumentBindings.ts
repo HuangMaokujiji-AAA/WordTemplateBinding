@@ -127,8 +127,14 @@ export function refreshBindingTargetStates(
     element.classList.toggle("is-footer", isFooter);
     element.classList.toggle("is-bound", item.isBound);
     element.dataset.partKind = item.locator.partKind;
+    if (item.boundDataPath) {
+      element.dataset.boundDataPath = item.boundDataPath;
+    } else {
+      delete element.dataset.boundDataPath;
+    }
+    refreshPlaceholderText(element, item);
     element.title = item.isBound
-      ? `${isFooter ? "页脚 · " : ""}已绑定：${item.boundDataPath}`
+      ? `${isFooter ? "页脚 · " : ""}已绑定：${item.boundDataPath}；拖入其他兼容字段可直接改绑`
       : `${isFooter ? "页脚 · " : ""}拖拽一个兼容字段到此处`;
     element.setAttribute(
       "aria-label",
@@ -348,6 +354,11 @@ function insertBindingTarget(
   });
   target.addEventListener("dragover", (event) => {
     event.preventDefault();
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = target.classList.contains("is-bound")
+        ? "link"
+        : "copy";
+    }
     target.classList.add("is-drag-over");
   });
   target.addEventListener("dragleave", () => {
@@ -368,6 +379,38 @@ function insertBindingTarget(
 
   refreshBindingTargetStates(paragraph, [item]);
   return true;
+}
+
+function refreshPlaceholderText(element: HTMLElement, item: MockItem): void {
+  const originalValue = item.locator.originalValue;
+  const hasPlaceholderMarker =
+    Boolean(item.placeholderCandidatePath) ||
+    (originalValue.startsWith("{{") &&
+      originalValue.endsWith("}}") &&
+      originalValue.length > 4);
+  if (!hasPlaceholderMarker) return;
+
+  const text =
+    item.isBound && item.boundDataPath
+      ? `{{${item.boundDataPath}}}`
+      : originalValue;
+  if (element.textContent === text) return;
+
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+  const textNodes: Text[] = [];
+  let node: Text | null;
+  while ((node = walker.nextNode() as Text | null)) textNodes.push(node);
+
+  if (textNodes.length === 0) {
+    element.append(document.createTextNode(text));
+    return;
+  }
+
+  // Keep the first rendered run so Word's font styling remains intact.
+  textNodes[0].data = text;
+  for (const remainingNode of textNodes.slice(1)) {
+    remainingNode.data = "";
+  }
 }
 
 function getBindableText(paragraph: HTMLElement): string {

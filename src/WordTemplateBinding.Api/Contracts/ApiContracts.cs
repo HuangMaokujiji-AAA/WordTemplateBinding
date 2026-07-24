@@ -40,6 +40,7 @@ internal sealed record MockItemResponse(
     TextLocatorResponse Locator,
     string ParagraphText,
     int PreviewParagraphIndex,
+    string? PlaceholderCandidatePath,
     bool IsBound,
     string? BoundDataPath,
     DataValueType? BoundDataType);
@@ -246,6 +247,7 @@ internal static class ApiContractMapper
                     ToResponse(item.Locator),
                     item.ParagraphText,
                     item.PreviewParagraphIndex,
+                    item.PlaceholderCandidatePath,
                     binding is not null,
                     binding?.DataPath,
                     binding?.DataType);

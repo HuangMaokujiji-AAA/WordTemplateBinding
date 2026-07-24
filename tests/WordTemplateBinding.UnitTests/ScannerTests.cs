@@ -87,6 +87,77 @@ public sealed class ScannerTests
     }
 
     /// <summary>
+    /// 验证黄色高亮文字和完整数字按高亮范围识别，并沿用可确定的数值类型。
+    /// </summary>
+    [Fact]
+    public async Task ScanAsync_YellowHighlights_ReturnsExactRangesWithInferredTypes()
+    {
+        byte[] bytes = OpenXmlTestDocumentFactory.CreateHighlightedParagraphDocument(
+            ("四年级", true),
+            ("学生平均分为", false),
+            ("543", true),
+            ("分，比例为", false),
+            ("9.2%", true));
+
+        TemplateScanResult result = await _scanner.ScanAsync(bytes);
+
+        Assert.Equal(
+            new[] { "四年级", "543", "9.2%" },
+            result.MockItems.Select(item => item.MockValue));
+        Assert.Equal(
+            new[] { MockDataType.String, MockDataType.Integer, MockDataType.String },
+            result.MockItems.Select(item => item.DataType));
+        Assert.Equal(
+            new[] { "四年级", "543", "9.2%" },
+            result.MockItems.Select(item => item.Locator.OriginalValue));
+    }
+
+    /// <summary>
+    /// 验证连续的黄色 Run 会合并为一个人工标记范围。
+    /// </summary>
+    [Fact]
+    public async Task ScanAsync_YellowNumberAcrossRuns_ReturnsOneMergedItem()
+    {
+        byte[] bytes = OpenXmlTestDocumentFactory.CreateHighlightedParagraphDocument(
+            ("成绩为", false),
+            ("5", true),
+            ("1", true),
+            ("8", true),
+            ("分", false));
+
+        TemplateScanResult result = await _scanner.ScanAsync(bytes);
+
+        MockDataItem item = Assert.Single(result.MockItems);
+        Assert.Equal("518", item.MockValue);
+        Assert.Equal(MockDataType.Integer, item.DataType);
+        Assert.Equal(3, item.Locator.Length);
+    }
+
+    /// <summary>
+    /// 验证黄色高亮优先于与其部分重叠的整段数字正则，同时保留其他自动识别结果。
+    /// </summary>
+    [Fact]
+    public async Task ScanAsync_PartialYellowNumber_DropsOverlappingRegexCandidate()
+    {
+        byte[] bytes = OpenXmlTestDocumentFactory.CreateHighlightedParagraphDocument(
+            ("值 1", false),
+            ("23", true),
+            ("，另一个值 45.6", false));
+
+        TemplateScanResult result = await _scanner.ScanAsync(bytes);
+
+        Assert.Equal(
+            new[] { "23", "45.6" },
+            result.MockItems.Select(item => item.MockValue));
+        Assert.Equal(
+            new[] { MockDataType.Integer, MockDataType.Decimal },
+            result.MockItems.Select(item => item.DataType));
+        Assert.DoesNotContain(
+            result.MockItems,
+            item => item.Locator.OriginalValue == "123");
+    }
+
+    /// <summary>
     /// 验证表格单元格普通段落中的小数被纳入扫描。
     /// </summary>
     [Fact]
