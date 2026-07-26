@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   downloadReport,
   downloadReusableTemplate,
+  getTemplateSegmentPreview,
+  insertTemplateSegmentBoundary,
 } from "../api/client";
 
 const DOCX_CONTENT_TYPE =
@@ -100,6 +102,56 @@ describe("DOCX download API client", () => {
 
     await expect(downloadReusableTemplate("bad-type")).rejects.toThrow(
       "服务器没有返回有效的 DOCX 文件。"
+    );
+  });
+
+  it("loads the selected segment preview instead of the full template file", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(new Blob(["segment-docx"]), {
+        status: 200,
+        headers: { "Content-Type": DOCX_CONTENT_TYPE },
+      })
+    );
+
+    const file = await getTemplateSegmentPreview(
+      "segment/id",
+      "major-monitoring-preview.docx"
+    );
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/template-segments/segment%2Fid/preview"
+    );
+    expect(file.name).toBe("major-monitoring-preview.docx");
+  });
+
+  it("posts a block range and content hash when inserting a segment boundary", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(JSON.stringify({ version: { id: "new-version" } }), {
+        status: 201,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+
+    await insertTemplateSegmentBoundary("version/id", {
+      segmentKey: "major-monitoring",
+      segmentName: "专业监测结果",
+      startBlockId: "body/2",
+      endBlockId: "body/5",
+      expectedContentHash: "abc123",
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/template-versions/version%2Fid/segment-boundaries",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          segmentKey: "major-monitoring",
+          segmentName: "专业监测结果",
+          startBlockId: "body/2",
+          endBlockId: "body/5",
+          expectedContentHash: "abc123",
+        }),
+      })
     );
   });
 });

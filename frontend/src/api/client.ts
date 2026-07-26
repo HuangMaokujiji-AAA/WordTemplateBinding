@@ -9,6 +9,8 @@ import type {
   ProjectRecord,
   TemplateElementRecord,
   TemplateRecord,
+  TemplateSegmentRecord,
+  TemplateSegmentOutline,
   TemplateResponse,
   TemplateVersionView,
 } from "./types";
@@ -318,6 +320,83 @@ export async function getTemplateVersionFile(
   return new File([await response.blob()], fileName, {
     type: DOCX_CONTENT_TYPE,
   });
+}
+
+export function listTemplateSegments(
+  templateVersionId: string,
+  bindingSetId?: string
+): Promise<{ items: TemplateSegmentRecord[] }> {
+  const url = new URL(
+    `/api/template-versions/${encodeURIComponent(templateVersionId)}/segments`,
+    window.location.origin
+  );
+  if (bindingSetId) url.searchParams.set("bindingSetId", bindingSetId);
+  return requestJson<{ items: TemplateSegmentRecord[] }>(
+    url
+  );
+}
+
+export function listTemplateSegmentElements(
+  segmentId: string
+): Promise<TemplateElementRecord[]> {
+  return requestJson<TemplateElementRecord[]>(
+    `/api/template-segments/${encodeURIComponent(segmentId)}/elements`
+  );
+}
+
+export async function getTemplateSegmentPreview(
+  segmentId: string,
+  fileName: string
+): Promise<File> {
+  const response = await fetch(
+    `/api/template-segments/${encodeURIComponent(segmentId)}/preview`
+  );
+  if (!response.ok) return parseError(response);
+  return new File([await response.blob()], fileName, {
+    type: DOCX_CONTENT_TYPE,
+  });
+}
+
+export function getTemplateSegmentOutline(
+  templateVersionId: string
+): Promise<TemplateSegmentOutline> {
+  return requestJson<TemplateSegmentOutline>(
+    `/api/template-versions/${encodeURIComponent(templateVersionId)}/segment-outline`
+  );
+}
+
+export function insertTemplateSegmentBoundary(
+  templateVersionId: string,
+  request: {
+    segmentKey: string;
+    segmentName: string;
+    startBlockId: string;
+    endBlockId: string;
+    expectedContentHash: string;
+  }
+): Promise<TemplateVersionView> {
+  return requestJson<TemplateVersionView>(
+    `/api/template-versions/${encodeURIComponent(templateVersionId)}/segment-boundaries`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    }
+  );
+}
+
+export function removeTemplateSegmentBoundary(
+  templateVersionId: string,
+  segmentKey: string,
+  expectedContentHash: string
+): Promise<TemplateVersionView> {
+  const url = new URL(
+    `/api/template-versions/${encodeURIComponent(templateVersionId)}` +
+      `/segment-boundaries/${encodeURIComponent(segmentKey)}`,
+    window.location.origin
+  );
+  url.searchParams.set("expectedContentHash", expectedContentHash);
+  return requestJson<TemplateVersionView>(url, { method: "DELETE" });
 }
 
 export interface PagedResponse<T> {
@@ -679,7 +758,9 @@ export function hydrateTemplateResponse(
     bindingItems.map((binding) => [binding.templateElementId, binding])
   );
   const scan = view.parseResult.scanResult;
-  const mockItems = scan.mockItems.map((item) => {
+  const mockItems = scan.mockItems.filter((item) =>
+    elementsByLocator.has(item.locatorId)
+  ).map((item) => {
     const element = elementsByLocator.get(item.locatorId);
     const binding = element ? bindingsByElement.get(element.id) : undefined;
     return {
@@ -690,7 +771,9 @@ export function hydrateTemplateResponse(
       boundDataType: null,
     };
   });
-  const charts = scan.charts.map((chart) => {
+  const charts = scan.charts.filter((chart) =>
+    elementsByLocator.has(chart.locatorId)
+  ).map((chart) => {
     const element = elementsByLocator.get(chart.locatorId);
     const binding = element ? bindingsByElement.get(element.id) : undefined;
     return {

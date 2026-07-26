@@ -28,8 +28,24 @@ public static class PersistentTemplateEndpoints
             .WithTags("Template versions");
         versions.MapGet("/{versionId:regex(^[0-9]+$)}", GetVersionAsync);
         versions.MapGet("/{versionId:regex(^[0-9]+$)}/elements", GetElementsAsync);
+        versions.MapGet("/{versionId:regex(^[0-9]+$)}/segments", GetSegmentsAsync);
+        versions.MapGet(
+            "/{versionId:regex(^[0-9]+$)}/segment-outline",
+            GetSegmentOutlineAsync);
+        versions.MapPost(
+            "/{versionId:regex(^[0-9]+$)}/segment-boundaries",
+            InsertSegmentBoundaryAsync);
+        versions.MapDelete(
+            "/{versionId:regex(^[0-9]+$)}/segment-boundaries/{segmentKey}",
+            RemoveSegmentBoundaryAsync);
         versions.MapGet("/{versionId:regex(^[0-9]+$)}/file", DownloadFileAsync);
         versions.MapPost("/{versionId:regex(^[0-9]+$)}/rescan", RescanAsync);
+
+        RouteGroupBuilder segments = endpoints.MapGroup("/api/template-segments")
+            .WithTags("Template segments");
+        segments.MapGet("/{segmentId:regex(^[0-9]+$)}", GetSegmentAsync);
+        segments.MapGet("/{segmentId:regex(^[0-9]+$)}/elements", GetSegmentElementsAsync);
+        segments.MapGet("/{segmentId:regex(^[0-9]+$)}/preview", GetSegmentPreviewAsync);
         return endpoints;
     }
 
@@ -191,6 +207,98 @@ public static class PersistentTemplateEndpoints
                 DatabaseIdParser.Required(versionId, nameof(versionId)),
                 cancellationToken))
             .Elements.Select(PersistentApiMapper.Element));
+
+    private static async Task<IResult> GetSegmentsAsync(
+        string versionId,
+        string? bindingSetId,
+        TemplateSegmentService service,
+        CancellationToken cancellationToken) =>
+        Results.Ok(new
+        {
+            items = (await service.ListAsync(
+                    DatabaseIdParser.Required(versionId, nameof(versionId)),
+                    string.IsNullOrWhiteSpace(bindingSetId)
+                        ? null
+                        : DatabaseIdParser.Required(bindingSetId, nameof(bindingSetId)),
+                    cancellationToken))
+                .Select(PersistentApiMapper.Segment),
+        });
+
+    private static async Task<IResult> GetSegmentAsync(
+        string segmentId,
+        TemplateSegmentService service,
+        CancellationToken cancellationToken) =>
+        Results.Ok(PersistentApiMapper.SegmentDetail(await service.GetAsync(
+            DatabaseIdParser.Required(segmentId, nameof(segmentId)),
+            cancellationToken)));
+
+    private static async Task<IResult> GetSegmentElementsAsync(
+        string segmentId,
+        TemplateSegmentService service,
+        CancellationToken cancellationToken) =>
+        Results.Ok((await service.ListElementsAsync(
+                DatabaseIdParser.Required(segmentId, nameof(segmentId)),
+                cancellationToken))
+            .Select(PersistentApiMapper.Element));
+
+    private static async Task<IResult> GetSegmentPreviewAsync(
+        string segmentId,
+        TemplateSegmentService service,
+        IFileStorageService files,
+        CancellationToken cancellationToken)
+    {
+        (ulong fileId, string fileName) = await service.GetOrCreatePreviewAsync(
+            DatabaseIdParser.Required(segmentId, nameof(segmentId)),
+            cancellationToken);
+        return new DatabaseFileResult(files, fileId, fileName,
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+    }
+
+    private static async Task<IResult> GetSegmentOutlineAsync(
+        string versionId,
+        TemplateSegmentService service,
+        CancellationToken cancellationToken) =>
+        Results.Ok(PersistentApiMapper.SegmentOutline(
+            await service.GetOutlineAsync(
+                DatabaseIdParser.Required(versionId, nameof(versionId)),
+                cancellationToken)));
+
+    private static async Task<IResult> InsertSegmentBoundaryAsync(
+        string versionId,
+        InsertTemplateSegmentBoundaryRequest request,
+        TemplateSegmentService service,
+        CancellationToken cancellationToken)
+    {
+        TemplateVersionView result = await service.InsertBoundaryAsync(
+            DatabaseIdParser.Required(versionId, nameof(versionId)),
+            request,
+            cancellationToken);
+        return Results.Created(
+            $"/api/template-versions/{result.Version.Id}",
+            PersistentApiMapper.VersionView(result));
+    }
+
+    private static async Task<IResult> RemoveSegmentBoundaryAsync(
+        string versionId,
+        string segmentKey,
+        string expectedContentHash,
+        TemplateSegmentService service,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(expectedContentHash))
+        {
+            throw new BadHttpRequestException("expectedContentHash 不能为空。");
+        }
+
+        TemplateVersionView result = await service.RemoveBoundaryAsync(
+            DatabaseIdParser.Required(versionId, nameof(versionId)),
+            segmentKey,
+            expectedContentHash,
+            cancellationToken);
+        return Results.Created(
+            $"/api/template-versions/{result.Version.Id}",
+            PersistentApiMapper.VersionView(result));
+    }
 
     private static async Task<IResult> RescanAsync(
         string versionId,

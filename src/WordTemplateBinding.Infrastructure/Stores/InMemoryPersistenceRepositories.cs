@@ -10,6 +10,7 @@ public sealed class InMemoryPersistenceState
     internal long TemplateId;
     internal long TemplateVersionId;
     internal long TemplateElementId;
+    internal long TemplateSegmentId;
     internal long ProjectId;
     internal long ChapterId;
     internal long DataConnectionId;
@@ -22,6 +23,7 @@ public sealed class InMemoryPersistenceState
     internal ConcurrentDictionary<ulong, TemplateRecord> Templates { get; } = new();
     internal ConcurrentDictionary<ulong, TemplateVersionRecord> Versions { get; } = new();
     internal ConcurrentDictionary<ulong, TemplateElementRecord> Elements { get; } = new();
+    internal ConcurrentDictionary<ulong, TemplateSegmentRecord> Segments { get; } = new();
     internal ConcurrentDictionary<ulong, ProjectRecord> Projects { get; } = new();
     internal ConcurrentDictionary<ulong, ChapterRecord> Chapters { get; } = new();
     internal ConcurrentDictionary<ulong, DataConnectionRecord> Connections { get; } = new();
@@ -431,6 +433,151 @@ public sealed class InMemoryTemplateElementRepository : ITemplateElementReposito
         _state.Elements.TryGetValue(id, out TemplateElementRecord? result);
         return Task.FromResult(result);
     }
+}
+
+public sealed class InMemoryTemplateSegmentRepository : ITemplateSegmentRepository
+{
+    private readonly InMemoryPersistenceState _state;
+
+    public InMemoryTemplateSegmentRepository(InMemoryPersistenceState state)
+    {
+        _state = state;
+    }
+
+    public Task<IReadOnlyList<TemplateSegmentRecord>> ReplaceForVersionAsync(
+        ulong templateVersionId,
+        IReadOnlyList<TemplateSegmentDefinition> segments,
+        ulong? actorUserId,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_state.SyncRoot)
+        {
+            Dictionary<string, TemplateSegmentRecord> existing = _state.Segments.Values
+                .Where(item => item.TemplateVersionId == templateVersionId)
+                .ToDictionary(item => item.SegmentKey, StringComparer.Ordinal);
+            Dictionary<string, ulong> ids = existing.ToDictionary(
+                item => item.Key,
+                item => item.Value.Id,
+                StringComparer.Ordinal);
+            DateTimeOffset now = DateTimeOffset.UtcNow;
+            foreach (TemplateSegmentDefinition definition in segments.OrderBy(item => item.Depth))
+            {
+                ulong id = ids.TryGetValue(definition.SegmentKey, out ulong currentId)
+                    ? currentId
+                    : checked((ulong)++_state.TemplateSegmentId);
+                ids[definition.SegmentKey] = id;
+                existing.TryGetValue(definition.SegmentKey, out TemplateSegmentRecord? current);
+                bool fingerprintChanged = current is not null &&
+                    !string.Equals(
+                        current.SegmentFingerprint,
+                        definition.SegmentFingerprint,
+                        StringComparison.Ordinal);
+                _state.Segments[id] = new TemplateSegmentRecord
+                {
+                    Id = id,
+                    TemplateVersionId = templateVersionId,
+                    ParentSegmentId = definition.ParentSegmentKey is null
+                        ? null
+                        : ids.GetValueOrDefault(definition.ParentSegmentKey),
+                    SegmentKey = definition.SegmentKey,
+                    SegmentName = definition.SegmentName,
+                    SegmentType = definition.SegmentType,
+                    AnchorType = definition.AnchorType,
+                    StartAnchorJson = definition.StartAnchorJson,
+                    EndAnchorJson = definition.EndAnchorJson,
+                    DocumentOrderStart = definition.DocumentOrderStart,
+                    DocumentOrderEnd = definition.DocumentOrderEnd,
+                    SegmentStatus = definition.SegmentStatus,
+                    SegmentFingerprint = definition.SegmentFingerprint,
+                    PreviewFileObjectId = fingerprintChanged ? null : current?.PreviewFileObjectId,
+                    PreviewStatus = fingerprintChanged
+                        ? "STALE"
+                        : current?.PreviewStatus ?? "NOT_CREATED",
+                    PreviewErrorMessage = fingerprintChanged
+                        ? null
+                        : current?.PreviewErrorMessage,
+                    SortNo = definition.SortNo,
+                    RowVersion = (current?.RowVersion ?? 0) + (current is null ? 0U : 1U),
+                    CreatedBy = current?.CreatedBy ?? actorUserId,
+                    CreatedAt = current?.CreatedAt ?? now,
+                    UpdatedBy = actorUserId,
+                    UpdatedAt = now,
+                };
+            }
+
+            HashSet<string> retained = segments
+                .Select(item => item.SegmentKey)
+                .ToHashSet(StringComparer.Ordinal);
+            foreach (TemplateSegmentRecord stale in existing.Values
+                         .Where(item => !retained.Contains(item.SegmentKey)))
+            {
+                _state.Segments.TryRemove(stale.Id, out _);
+                foreach ((ulong elementId, TemplateElementRecord element) in _state.Elements
+                             .Where(item => item.Value.SegmentId == stale.Id)
+                             .ToList())
+                {
+                    _state.Elements[elementId] = element with { SegmentId = null };
+                }
+            }
+
+            return Task.FromResult<IReadOnlyList<TemplateSegmentRecord>>(
+                ListUnsafe(templateVersionId));
+        }
+    }
+
+    public Task<IReadOnlyList<TemplateSegmentRecord>> ListAsync(
+        ulong templateVersionId,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult<IReadOnlyList<TemplateSegmentRecord>>(
+            ListUnsafe(templateVersionId));
+    }
+
+    public Task<TemplateSegmentRecord?> GetAsync(
+        ulong segmentId,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        _state.Segments.TryGetValue(segmentId, out TemplateSegmentRecord? segment);
+        return Task.FromResult(segment);
+    }
+
+    public Task SetPreviewAsync(
+        ulong segmentId,
+        ulong? previewFileObjectId,
+        string previewStatus,
+        string? errorMessage,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_state.SyncRoot)
+        {
+            if (_state.Segments.TryGetValue(segmentId, out TemplateSegmentRecord? current))
+            {
+                _state.Segments[segmentId] = current with
+                {
+                    PreviewFileObjectId = previewFileObjectId,
+                    PreviewStatus = previewStatus,
+                    PreviewErrorMessage = errorMessage,
+                    RowVersion = current.RowVersion + 1,
+                    UpdatedAt = DateTimeOffset.UtcNow,
+                };
+            }
+
+            return Task.CompletedTask;
+        }
+    }
+
+    private IReadOnlyList<TemplateSegmentRecord> ListUnsafe(ulong versionId) =>
+        _state.Segments.Values
+            .Where(item => item.TemplateVersionId == versionId)
+            .OrderBy(item => item.DocumentOrderStart)
+            .ThenBy(item => item.SortNo)
+            .ThenBy(item => item.Id)
+            .ToList()
+            .AsReadOnly();
 }
 
 public sealed class InMemoryProjectRepository : IProjectRepository

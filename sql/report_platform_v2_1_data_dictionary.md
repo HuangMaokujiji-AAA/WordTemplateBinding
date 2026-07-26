@@ -312,6 +312,27 @@
 - `fk_rp_tv_template`：(`template_id`) → `rp_template`(`id`)；策略：`ON DELETE RESTRICT`。
 - `fk_rp_tv_file`：(`file_object_id`) → `rp_file_object`(`id`)；策略：`ON DELETE RESTRICT`。
 
+### `rp_template_segment`（V2.2）
+
+**作用：** 保存不可变模板版本中的逻辑绑定范围、稳定锚点、树形关系、结构指纹和片段预览缓存。片段预览仅供工作区使用，最终报告仍读取完整原始模板。
+
+| 字段组 | 关键字段 | 说明 |
+|---|---|---|
+| 身份与树 | `id`, `template_version_id`, `parent_segment_id`, `segment_key` | `segment_key` 在模板版本内唯一；父片段删除受限。 |
+| 显示与范围 | `segment_name`, `segment_type`, `anchor_type`, `start_anchor_json`, `end_anchor_json`, `document_order_start`, `document_order_end` | 第一版支持 `CONTENT_CONTROL` 和旧模板的 `VIRTUAL` 根片段。 |
+| 状态与缓存 | `segment_status`, `segment_fingerprint`, `preview_file_object_id`, `preview_status`, `preview_error_message` | 指纹变化会使预览缓存失效；预览文件删除时引用自动置空。 |
+| 并发与审计 | `sort_no`, `row_version`, `created_by`, `created_at`, `updated_by`, `updated_at` | `row_version` 用于乐观锁。 |
+
+**约束与索引：**
+
+- `uk_rp_template_segment`：(`template_version_id`, `segment_key`)
+- `idx_rp_segment_order`：(`template_version_id`, `document_order_start`)
+- `idx_rp_segment_parent`：(`parent_segment_id`, `sort_no`)
+- `fk_rp_segment_version` → `rp_template_version(id)`，`ON DELETE CASCADE`
+- `fk_rp_segment_parent` → `rp_template_segment(id)`，`ON DELETE RESTRICT`
+- `fk_rp_segment_preview_file` → `rp_file_object(id)`，`ON DELETE SET NULL`
+- `chk_rp_segment_document_order`：`document_order_start <= document_order_end`
+
 ### `rp_template_element`
 
 **作用：** 保存从某个模板版本中解析出的可绑定元素，是前端模板元素树和拖拽绑定的目标清单。
@@ -320,6 +341,7 @@
 |---|---|---:|---|---|---|
 | `id` | `BIGINT UNSIGNED` | 否 | — | PK | 模板元素主键。 由数据库自增生成。 |
 | `template_version_id` | `BIGINT UNSIGNED` | 否 | — | UK:uk_rp_template_element<br>FK:fk_rp_te_version | 关联具体、不可变的模板版本。 |
+| `segment_id` | `BIGINT UNSIGNED` | 是 | `NULL` | FK:fk_rp_element_segment | 所属最内层片段；全局元素或尚未重扫的历史元素为空。 |
 | `element_key` | `VARCHAR(255)` | 否 | — | UK:uk_rp_template_element | 模板版本内稳定定位键，例如内容控件 Tag、书签、占位符或 Chart 关系 ID。 |
 | `element_type` | `VARCHAR(32)` | 否 | — | — | 模板元素类型，例如文本、表格、图表、图片、重复块或条件块。 |
 | `locator_type` | `VARCHAR(32)` | 否 | — | — | 元素在 DOCX 中的定位方式。 |
@@ -329,6 +351,7 @@
 | `default_value_json` | `JSON` | 是 | `NULL` | — | 元素未绑定或数据为空时的模板默认值。 |
 | `is_required` | `TINYINT(1)` | 否 | `0` | — | 是否为必须绑定或必须有值的元素。 |
 | `sort_no` | `INT` | 否 | `0` | — | 展示或执行顺序。 |
+| `segment_local_order` | `INT UNSIGNED` | 否 | `0` | idx_rp_element_segment | 元素在所属片段内的文档顺序。 |
 | `parse_status` | `VARCHAR(32)` | 否 | `'VALID'` | — | 元素解析结果状态。 |
 | `parse_message` | `VARCHAR(1000)` | 是 | `NULL` | — | 元素解析警告、暂不支持原因或错误说明。 |
 | `created_at` | `DATETIME(3)` | 否 | `CURRENT_TIMESTAMP(3)` | — | 记录创建时间，使用毫秒精度。 |
@@ -342,10 +365,12 @@
 **普通索引：**
 
 - `idx_rp_element_type`：(`template_version_id`, `element_type`)
+- `idx_rp_element_segment`：(`segment_id`, `segment_local_order`)
 
 **外键关联：**
 
 - `fk_rp_te_version`：(`template_version_id`) → `rp_template_version`(`id`)；策略：`ON DELETE CASCADE`。
+- `fk_rp_element_segment`：(`segment_id`) → `rp_template_segment`(`id`)；策略：`ON DELETE SET NULL`。
 
 
 ## 8. 项目与章节域

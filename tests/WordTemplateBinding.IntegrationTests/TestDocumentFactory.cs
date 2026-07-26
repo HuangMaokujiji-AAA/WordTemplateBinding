@@ -38,6 +38,25 @@ internal static class TestDocumentFactory
         return stream.ToArray();
     }
 
+    /// <summary>创建包含多个独立段落的普通 DOCX。</summary>
+    internal static byte[] CreateParagraphs(params string[] texts)
+    {
+        using MemoryStream stream = new();
+        using (WordprocessingDocument document = WordprocessingDocument.Create(
+                   stream,
+                   WordprocessingDocumentType.Document,
+                   true))
+        {
+            MainDocumentPart mainPart = document.AddMainDocumentPart();
+            mainPart.Document = new Document(new Body(
+                texts.Select(text =>
+                    new Paragraph(new Run(new Text(text))))));
+            mainPart.Document.Save();
+        }
+
+        return stream.ToArray();
+    }
+
     /// <summary>
     /// 读取 DOCX 主文档正文文本。
     /// </summary>

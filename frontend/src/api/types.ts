@@ -382,6 +382,7 @@ export interface TemplateRecord {
 export interface TemplateElementRecord {
   id: string;
   templateVersionId: string;
+  segmentId: string | null;
   elementKey: string;
   elementType: "TEXT" | "CHART" | string;
   locatorType: string;
@@ -391,8 +392,48 @@ export interface TemplateElementRecord {
   defaultValue: unknown;
   isRequired: boolean;
   sortNo: number;
+  segmentLocalOrder: number;
   parseStatus: string;
   parseMessage: string | null;
+}
+
+export interface TemplateSegmentRecord {
+  id: string;
+  templateVersionId: string;
+  parentSegmentId: string | null;
+  segmentKey: string;
+  segmentName: string;
+  segmentType: string;
+  anchorType: string;
+  documentOrderStart: number;
+  documentOrderEnd: number;
+  segmentStatus: string;
+  previewStatus: string;
+  previewErrorMessage: string | null;
+  sortNo: number;
+  elementCount: number;
+  bindingProgress: {
+    total: number;
+    bound: number;
+    requiredMissing: number;
+  };
+  rowVersion: number;
+}
+
+export interface TemplateOutlineBlock {
+  blockId: string;
+  blockType: string;
+  displayText: string;
+  segmentKey: string | null;
+  canSelect: boolean;
+  depth: number;
+  children: TemplateOutlineBlock[];
+}
+
+export interface TemplateSegmentOutline {
+  templateVersionId: string;
+  contentHash: string;
+  blocks: TemplateOutlineBlock[];
 }
 
 export interface TemplateVersionView {

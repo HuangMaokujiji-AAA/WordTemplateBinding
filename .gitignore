@@ -35,6 +35,7 @@ BenchmarkDotNet.Artifacts/
 
 # Local application configuration (may contain database credentials)
 src/WordTemplateBinding.Api/appsettings.json
+src/WordTemplateBinding.Api/appsettings.Development.json
 
 # Local agent metadata and project documentation
 .agents/

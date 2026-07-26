@@ -7,6 +7,7 @@ using WordTemplateBinding.Core.Services;
 using WordTemplateBinding.Infrastructure.Database;
 using WordTemplateBinding.Infrastructure.DataSchema;
 using WordTemplateBinding.Infrastructure.OpenXml;
+using WordTemplateBinding.Infrastructure.OpenXml.Segments;
 using WordTemplateBinding.Infrastructure.Stores;
 
 namespace WordTemplateBinding.Infrastructure.DependencyInjection;
@@ -126,6 +127,9 @@ public static class ServiceCollectionExtensions
         }
 
         services.AddSingleton<IWordTemplateScanner, WordTemplateScanner>();
+        services.AddSingleton<IWordTemplateSegmentScanner, OpenXmlTemplateSegmentScanner>();
+        services.AddSingleton<IWordSegmentPreviewRenderer, OpenXmlSegmentPreviewRenderer>();
+        services.AddSingleton<IWordTemplateSegmentEditor, OpenXmlTemplateSegmentEditor>();
         services.AddSingleton<ITemplateElementIdentityResolver, TemplateElementIdentityResolver>();
         services.AddSingleton<IWordReportRenderer, WordReportRenderer>();
         services.AddSingleton<IWordReusableTemplateRenderer, WordReusableTemplateRenderer>();
@@ -153,6 +157,7 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<IContextualDataSchemaProvider, PersistentDataSchemaProvider>();
         services.AddScoped<TemplateCatalogService>();
+        services.AddScoped<TemplateSegmentService>();
         services.AddScoped<ProjectChapterService>();
         services.AddScoped<DataConnectionService>();
         services.AddScoped<DataSourceWorkspaceService>();
@@ -171,6 +176,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ITemplateRepository, MySqlTemplateRepository>();
         services.AddSingleton<ITemplateVersionRepository, MySqlTemplateVersionRepository>();
         services.AddSingleton<ITemplateElementRepository, MySqlTemplateElementRepository>();
+        services.AddSingleton<ITemplateSegmentRepository, MySqlTemplateSegmentRepository>();
         services.AddSingleton<IProjectRepository, MySqlProjectRepository>();
         services.AddSingleton<IChapterRepository, MySqlChapterRepository>();
         services.AddSingleton<IDataConnectionRepository, MySqlDataConnectionRepository>();
@@ -189,6 +195,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ITemplateRepository, InMemoryTemplateRepository>();
         services.AddSingleton<ITemplateVersionRepository, InMemoryTemplateVersionRepository>();
         services.AddSingleton<ITemplateElementRepository, InMemoryTemplateElementRepository>();
+        services.AddSingleton<ITemplateSegmentRepository, InMemoryTemplateSegmentRepository>();
         services.AddSingleton<IProjectRepository, InMemoryProjectRepository>();
         services.AddSingleton<IChapterRepository, InMemoryChapterRepository>();
         services.AddSingleton<IDataConnectionRepository, InMemoryDataConnectionRepository>();

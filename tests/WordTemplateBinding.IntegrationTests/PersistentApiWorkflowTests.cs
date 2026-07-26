@@ -57,6 +57,21 @@ public sealed class PersistentApiWorkflowTests
         Assert.True(ulong.TryParse(versionId, out _));
         Assert.True(ulong.TryParse(elementId, out _));
 
+        JsonElement segmentList = await _client
+            .GetFromJsonAsync<JsonElement>(
+                $"/api/template-versions/{versionId}/segments");
+        JsonElement segment = segmentList.GetProperty("items")[0];
+        Assert.Equal("full-document", segment.GetProperty("segmentKey").GetString());
+        string segmentId = segment.GetProperty("id").GetString()!;
+        JsonElement segmentElements = await _client
+            .GetFromJsonAsync<JsonElement>(
+                $"/api/template-segments/{segmentId}/elements");
+        Assert.Equal(elementId, segmentElements[0].GetProperty("id").GetString());
+        HttpResponseMessage segmentPreview = await _client.GetAsync(
+            $"/api/template-segments/{segmentId}/preview");
+        Assert.Equal(HttpStatusCode.OK, segmentPreview.StatusCode);
+        Assert.NotEmpty(await segmentPreview.Content.ReadAsByteArrayAsync());
+
         HttpResponseMessage download = await _client.GetAsync(
             $"/api/template-versions/{versionId}/file");
         Assert.Equal(HttpStatusCode.OK, download.StatusCode);
@@ -112,6 +127,111 @@ public sealed class PersistentApiWorkflowTests
         Assert.Equal(
             versionId,
             bindingSet.GetProperty("templateVersionId").GetString());
+    }
+
+    /// <summary>
+    /// 验证网页边界编辑创建新版本，删除边界只解包且不改变正文。
+    /// </summary>
+    [Fact]
+    public async Task SegmentBoundaryApi_CreatesImmutableVersionsAndPreservesContent()
+    {
+        byte[] bytes = TestDocumentFactory.CreateParagraphs("第一段", "第二段", "第三段");
+        using MultipartFormDataContent form = new();
+        form.Add(new ByteArrayContent(bytes), "file", "boundary.docx");
+        form.Add(new StringContent($"BOUNDARY_{Guid.NewGuid():N}"), "templateCode");
+        form.Add(new StringContent("边界模板"), "templateName");
+        HttpResponseMessage upload = await _client.PostAsync("/api/templates", form);
+        upload.EnsureSuccessStatusCode();
+        using JsonDocument uploaded = JsonDocument.Parse(
+            await upload.Content.ReadAsStringAsync());
+        string originalVersionId = uploaded.RootElement
+            .GetProperty("version").GetProperty("id").GetString()!;
+
+        JsonElement outline = await _client.GetFromJsonAsync<JsonElement>(
+            $"/api/template-versions/{originalVersionId}/segment-outline");
+        JsonElement blocks = outline.GetProperty("blocks");
+        HttpResponseMessage insert = await _client.PostAsJsonAsync(
+            $"/api/template-versions/{originalVersionId}/segment-boundaries",
+            new
+            {
+                segmentKey = "first-two",
+                segmentName = "前两段",
+                startBlockId = blocks[0].GetProperty("blockId").GetString(),
+                endBlockId = blocks[1].GetProperty("blockId").GetString(),
+                expectedContentHash = outline.GetProperty("contentHash").GetString(),
+            });
+        Assert.Equal(HttpStatusCode.Created, insert.StatusCode);
+        using JsonDocument inserted = JsonDocument.Parse(
+            await insert.Content.ReadAsStringAsync());
+        string insertedVersionId = inserted.RootElement
+            .GetProperty("version").GetProperty("id").GetString()!;
+        Assert.NotEqual(originalVersionId, insertedVersionId);
+
+        JsonElement insertedSegments = await _client.GetFromJsonAsync<JsonElement>(
+            $"/api/template-versions/{insertedVersionId}/segments");
+        Assert.Equal(
+            "first-two",
+            insertedSegments.GetProperty("items")[0]
+                .GetProperty("segmentKey").GetString());
+
+        JsonElement insertedOutline = await _client.GetFromJsonAsync<JsonElement>(
+            $"/api/template-versions/{insertedVersionId}/segment-outline");
+        string insertedHash = insertedOutline.GetProperty("contentHash").GetString()!;
+        HttpResponseMessage remove = await _client.DeleteAsync(
+            $"/api/template-versions/{insertedVersionId}/segment-boundaries/first-two" +
+            $"?expectedContentHash={insertedHash}");
+        Assert.Equal(HttpStatusCode.Created, remove.StatusCode);
+        using JsonDocument removed = JsonDocument.Parse(
+            await remove.Content.ReadAsStringAsync());
+        string removedVersionId = removed.RootElement
+            .GetProperty("version").GetProperty("id").GetString()!;
+
+        HttpResponseMessage download = await _client.GetAsync(
+            $"/api/template-versions/{removedVersionId}/file");
+        Assert.Equal(
+            "第一段第二段第三段",
+            TestDocumentFactory.ReadBodyText(
+                await download.Content.ReadAsByteArrayAsync()));
+        JsonElement originalSegments = await _client.GetFromJsonAsync<JsonElement>(
+            $"/api/template-versions/{originalVersionId}/segments");
+        Assert.Equal(
+            "full-document",
+            originalSegments.GetProperty("items")[0]
+                .GetProperty("segmentKey").GetString());
+    }
+
+    /// <summary>
+    /// 验证主文档图表按 relationshipId 归属片段，而不是误用 ChartPart 路径。
+    /// </summary>
+    [Fact]
+    public async Task TemplateSegmentApi_IncludesMainDocumentCharts()
+    {
+        byte[] bytes = TestDocumentFactory.CreateChartDocument();
+        using MultipartFormDataContent form = new();
+        form.Add(new ByteArrayContent(bytes), "file", "segment-chart.docx");
+        form.Add(new StringContent($"SEG_CHART_{Guid.NewGuid():N}"), "templateCode");
+        form.Add(new StringContent("片段图表模板"), "templateName");
+
+        HttpResponseMessage upload = await _client.PostAsync("/api/templates", form);
+        upload.EnsureSuccessStatusCode();
+        using JsonDocument uploaded = JsonDocument.Parse(
+            await upload.Content.ReadAsStringAsync());
+        string versionId = uploaded.RootElement
+            .GetProperty("version").GetProperty("id").GetString()!;
+        Assert.Equal(
+            1,
+            uploaded.RootElement.GetProperty("parseResult")
+                .GetProperty("scanResult").GetProperty("charts").GetArrayLength());
+
+        JsonElement segmentList = await _client.GetFromJsonAsync<JsonElement>(
+            $"/api/template-versions/{versionId}/segments");
+        JsonElement segment = segmentList.GetProperty("items")[0];
+        Assert.Equal(1, segment.GetProperty("elementCount").GetInt32());
+        string segmentId = segment.GetProperty("id").GetString()!;
+
+        JsonElement elements = await _client.GetFromJsonAsync<JsonElement>(
+            $"/api/template-segments/{segmentId}/elements");
+        Assert.Equal("CHART", elements[0].GetProperty("elementType").GetString());
     }
 
     private async Task<JsonElement> PostJsonAsync(string path, object request)

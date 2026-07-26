@@ -5,6 +5,7 @@ using WordTemplateBinding.Core.Options;
 using WordTemplateBinding.Core.Services;
 using WordTemplateBinding.Infrastructure.DataSchema;
 using WordTemplateBinding.Infrastructure.OpenXml;
+using WordTemplateBinding.Infrastructure.OpenXml.Segments;
 using WordTemplateBinding.Infrastructure.Stores;
 
 namespace WordTemplateBinding.UnitTests;
@@ -193,13 +194,16 @@ public sealed class PersistentWorkflowTests
             InMemoryTemplateRepository templates = new(_state);
             _versions = new InMemoryTemplateVersionRepository(_state);
             _elements = new InMemoryTemplateElementRepository(_state);
+            InMemoryTemplateSegmentRepository segments = new(_state);
             Files = new InMemoryFileStorageService(new DatabaseFileStorageOptions());
             Templates = new TemplateCatalogService(
                 templates,
                 _versions,
                 _elements,
+                segments,
                 Files,
                 TestServiceFactory.CreateScanner(),
+                new OpenXmlTemplateSegmentScanner(),
                 new TemplateElementIdentityResolver(),
                 templateOptions,
                 new DatabaseFileStorageOptions());
