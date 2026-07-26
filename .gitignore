@@ -33,6 +33,9 @@ packages/
 *.pid
 BenchmarkDotNet.Artifacts/
 
+# Local application configuration (may contain database credentials)
+src/WordTemplateBinding.Api/appsettings.json
+
 # Local agent metadata and project documentation
 .agents/
 docs/*

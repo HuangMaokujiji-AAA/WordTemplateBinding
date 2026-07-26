@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
   <PropertyGroup>
     <FrontendRoot>$(MSBuildProjectDirectory)\..\..\frontend</FrontendRoot>
+    <UserSecretsId>WordTemplateBinding-ReportPlatform-Database</UserSecretsId>
   </PropertyGroup>
 
   <ItemGroup>

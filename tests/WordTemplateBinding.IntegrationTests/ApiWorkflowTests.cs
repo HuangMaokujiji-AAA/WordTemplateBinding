@@ -38,6 +38,37 @@ public sealed class ApiWorkflowTests : IClassFixture<WebApplicationFactory<Progr
     }
 
     /// <summary>
+    /// 验证数据库凭据仍为空时返回明确且不含敏感信息的诊断结果。
+    /// </summary>
+    [Fact]
+    public async Task DatabaseHealth_WithoutCredentials_ReturnsNotConfigured()
+    {
+        HttpResponseMessage response =
+            await _client.GetAsync("/api/system/database/health");
+        using JsonDocument body = JsonDocument.Parse(
+            await response.Content.ReadAsStringAsync());
+        JsonElement root = body.RootElement;
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal("not_configured", root.GetProperty("status").GetString());
+        Assert.Equal("report_platform", root.GetProperty("database").GetString());
+        Assert.Equal(
+            new[]
+            {
+                "Database:Host",
+                "Database:Username",
+                "Database:Password",
+            },
+            root.GetProperty("missingSettings")
+                .EnumerateArray()
+                .Select(item => item.GetString()));
+        Assert.DoesNotContain(
+            "Password=",
+            await response.Content.ReadAsStringAsync(),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// 验证上传、Schema、绑定、生成和删除绑定的完整流程。
     /// </summary>
     [Fact]

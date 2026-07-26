@@ -34,9 +34,10 @@ builder.Services.AddProblemDetails(options =>
     {
         context.ProblemDetails.Extensions.TryAdd(
             "traceId",
-            context.HttpContext.TraceIdentifier);
+        context.HttpContext.TraceIdentifier);
     };
 });
+builder.Services.AddReportPlatformDatabase(builder.Configuration);
 builder.Services.AddWordTemplateBinding(templateOptions);
 
 WebApplication app = builder.Build();
@@ -49,6 +50,7 @@ app.MapBindingEndpoints();
 app.MapDataSchemaEndpoints();
 app.MapReportEndpoints();
 app.MapChartAnalysisEndpoints();
+app.MapDatabaseEndpoints();
 app.Run();
 
 /// <summary>

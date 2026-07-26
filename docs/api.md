@@ -357,6 +357,27 @@ Content-Disposition: attachment; filename*=UTF-8''template-template.docx
 - `409 empty_reusable_template_bindings`
 - `409 reusable_template_rendering_failed`
 
+## 10. 数据库连接健康检查
+
+```http
+GET /api/system/database/health
+```
+
+该接口会真实连接 MySQL，并执行 `SELECT DATABASE(), VERSION()`。成功时返回：
+
+```json
+{
+  "status": "healthy",
+  "provider": "MySQL",
+  "database": "report_platform",
+  "serverVersion": "8.0.x",
+  "missingSettings": [],
+  "message": "数据库连接成功。"
+}
+```
+
+IP、账号或密码尚未填写时返回 `503` 和 `not_configured`；参数完整但远程连接失败时返回 `503` 和 `unavailable`。响应与日志均不会输出数据库密码。
+
 ## 状态码汇总
 
 | 状态码 | 使用场景 |
@@ -366,4 +387,5 @@ Content-Disposition: attachment; filename*=UTF-8''template-template.docx
 | `404` | 模板、Locator 或字段不存在 |
 | `409` | 绑定类型不兼容、模板没有绑定或复用模板导出前校验失败 |
 | `413` | 上传文件超过配置限制 |
+| `503` | 数据库尚未配置或远程数据库不可用 |
 | `500` | 报告生成或服务器内部错误 |

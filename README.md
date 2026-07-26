@@ -17,8 +17,9 @@ WordTemplateBinding 是一个基于 .NET 7、ASP.NET Core Minimal API 和 Open X
 - .NET SDK 7
 - 支持 ES Modules、Fetch API 和 HTML Drag and Drop API 的现代浏览器
 - Microsoft Word 或 WPS Office，用于人工检查最终 DOCX
+- MySQL 8.0+（连接 Report Platform 数据库时需要）
 
-应用运行不需要 Node.js、Python、LibreOffice、数据库或外部存储。
+IP、账号和密码未配置时应用仍可启动并使用现有内存 MVP 功能；远程数据库连接功能需要 MySQL 8.0+。
 
 ## 项目结构
 
@@ -144,6 +145,17 @@ dotnet run --project .\src\WordTemplateBinding.Api --urls http://127.0.0.1:5080
 
 ```json
 {
+  "Database": {
+    "Host": "",
+    "Port": 3306,
+    "Database": "report_platform",
+    "Username": "",
+    "Password": "",
+    "SslMode": "Preferred",
+    "ConnectionTimeoutSeconds": 15,
+    "DefaultCommandTimeoutSeconds": 30,
+    "MaximumPoolSize": 50
+  },
   "TemplateProcessing": {
     "MaxUploadSizeMb": 20,
     "MockNumberPattern": "(?<![A-Za-z0-9_.,-])-?(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)\\.[0-9]+(?![A-Za-z0-9_.,])",
@@ -155,12 +167,28 @@ dotnet run --project .\src\WordTemplateBinding.Api --urls http://127.0.0.1:5080
 }
 ```
 
+- `Database.Host`：远程 MySQL 的 IP 或主机名。
+- `Database.Port`：MySQL 端口，默认为 `3306`。
+- `Database.Database`：目标数据库，当前固定为 `report_platform`。
+- `Database.Username` / `Database.Password`：数据库账号和密码。
+- `Database.SslMode`：TLS 模式；远程数据库支持 TLS 时建议改为 `Required` 或更严格模式。
+- `Database.MaximumPoolSize`：应用连接池最大连接数。
 - `MaxUploadSizeMb`：单个模板最大上传大小。
 - `MockNumberPattern`：小数识别正则，允许数值紧贴中文。
 - `MockIntegerPattern`：整数识别正则，不会截取小数的一部分。
 - `MockTextPattern`：显式文字标记识别正则，必须包含名为 `value` 的捕获组。
 - `ContextLength`：计算定位上下文哈希时匹配值两侧的字符数。
 - `RegexTimeoutMilliseconds`：单次正则匹配超时。
+
+不要把真实密码提交到 `appsettings.json`。本地开发可使用 .NET User Secrets：
+
+```powershell
+dotnet user-secrets set "Database:Host" "远程数据库IP" --project .\src\WordTemplateBinding.Api
+dotnet user-secrets set "Database:Username" "数据库账号" --project .\src\WordTemplateBinding.Api
+dotnet user-secrets set "Database:Password" "数据库密码" --project .\src\WordTemplateBinding.Api
+```
+
+部署环境可使用 `Database__Host`、`Database__Username`、`Database__Password` 环境变量覆盖空占位。配置后访问 `GET /api/system/database/health`，接口会真实连接 MySQL 并确认当前数据库为 `report_platform`。
 
 ## 核心实现说明
 
@@ -230,7 +258,7 @@ Manifest 不保存真实数据、模板正文、数据库连接或认证信息�
 - 扫描主文档正文、表格单元格和 FooterPart 页脚中的普通段落；页脚 Locator 会记录具体 `/word/footerN.xml` 部件。
 - 暂不扫描页眉、脚注、尾注和文本框。
 - 浏览器预览是段落级结构化预览，不是 Word 像素级预览。
-- 使用内存模板和绑定存储，服务重启后数据丢失。
+- 已接入 `report_platform` 的 MySQL 连接池和连接健康检查；现有模板、绑定与演示数据业务存储仍为内存实现，服务重启后数据丢失。
 - 使用演示字段树和演示数据值。
 - 集合字段当前仅用于整张图表的数据绑定，不用于循环表格。
 - 支持更新 Word 原生图表的分类、系列名称和数值缓存；当前不增加或删除系列，也不回写图表内嵌 Excel 工作簿。
@@ -248,3 +276,4 @@ Manifest 不保存真实数据、模板正文、数据库连接或认证信息�
 - 下载文件名会移除路径和非法字符。
 - 前端不把模板文本写入 `innerHTML`，而是创建文本节点和元素。
 - 日志不记录完整 DOCX、模板正文或数据值。
+- 数据库密码不写入连接诊断响应；建议通过 User Secrets、环境变量或部署密钥管理系统注入。

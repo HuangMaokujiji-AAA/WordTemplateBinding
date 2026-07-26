@@ -1,29 +1,44 @@
-# 评估报告批量生成平台 V2 数据库设计与数据字典
+# 评估报告批量生成平台 V2.1 数据库设计与数据字典
 
 > 数据库：MySQL 8.0+  
 > 默认字符集：`utf8mb4`  
 > 默认排序规则：`utf8mb4_0900_ai_ci`  
-> 表前缀：`rp_`（Report Platform）  
-> 适用场景：300 页级大文档拆分、多人协同、模板解析、拖拽数据绑定、并行章节渲染、最终组装、正式发布与审计。
+> 文件存储方式：**MySQL 分片 BLOB 存储**  
+> 适用场景：300 页级大文档拆分、多人协同、模板解析、拖拽数据绑定、并行章节渲染、最终组装与正式发布。
 
-## 1. 使用约定
+## 1. V2.1 变更结论
 
-1. **大文件不进入 MySQL**：DOCX、PDF、Excel、图片和大型 JSON 存入本地文件系统、MinIO、OSS 或 S3，数据库只保存 `rp_file_object` 元数据。
-2. **用户体系优先复用现有项目**：`created_by`、`updated_by`、`user_id`、`owner_user_id` 等字段逻辑关联现有用户表（例如 RuoYi `sys_user.user_id`），为避免跨库和部署耦合，不建立物理外键。
-3. **不可变版本不能覆盖更新**：模板版本、数据快照、章节版本和正式发布版本发布后不得原地修改，只能创建新版本。
-4. **当前态与历史态分离**：`rp_chapter` 保存当前工作状态，`rp_chapter_revision` 保存可复现的历史版本；其他领域采用同样原则。
-5. **业务状态使用 `VARCHAR`**：具体枚举值由 Java 枚举、状态机和接口校验约束，便于后续增加状态。
-6. **JSON 只承载可变复杂配置**：稳定关系使用普通字段和外键，复杂定位、格式、转换、清单和校验结果使用 JSON。
-7. **时间建议统一存 UTC**：数据库写入 UTC，接口层根据用户时区展示。
+由于部署环境不允许使用本地持久化目录、MinIO、OSS 或 S3，V2.1 将所有 DOCX、PDF、Excel、图片和大型 JSON 的文件字节保存到 MySQL。
 
-## 2. 表清单
+本方案**不把完整大文件直接放入 `rp_file_object` 的单个 `LONGBLOB` 字段**，而采用以下结构：
+
+- `rp_file_object`：只保存文件元数据、完整哈希、分片参数和状态；
+- `rp_file_chunk`：保存实际二进制分片，主键为 `(file_object_id, chunk_no)`；
+- `rp_file_upload_session`：保存断点上传会话和进度。
+
+这样可以避免元数据查询加载大 BLOB，降低单次事务和 `max_allowed_packet` 压力，并支持断点续传、失败重试、流式下载和单片校验。
+
+## 2. 关键设计约定
+
+1. 文件原始字节直接写入 `MEDIUMBLOB`，禁止先 Base64 编码后放入 JSON。
+2. 默认分片大小为 `4 MiB`（`4194304` 字节），可按压测调整，但不得超过 `MEDIUMBLOB` 上限。
+3. 每个分片单独提交事务；禁止把整个数百 MB 文件放在一个数据库事务中。
+4. 只有完成分片数量、字节总和、分片哈希和完整文件 SHA-256 校验后，文件状态才能变为 `READY`。
+5. 下载必须执行 `ORDER BY chunk_no ASC` 并流式写入响应，不允许一次性把完整文件读入 JVM 内存。
+6. 模板版本、数据快照和生成产物仍通过 `file_object_id` 关联文件；业务表无需新增大 BLOB 字段。
+7. 文件逻辑删除只更新 `deleted_at/object_status`；物理清理必须先确认没有模板、快照或产物引用。
+8. 用户、角色和组织机构继续复用现有认证系统，相关用户 ID 不建立跨系统物理外键。
+
+## 3. 表清单
 
 | 领域 | 表名 | 作用 |
 |---|---|---|
-| 文件与模板域 | `rp_file_object` | 统一记录上传文件和系统生成文件的存储元数据。数据库保存稳定的对象键，不保存短期签名 URL，也不保存大文件二进制。 |
-| 文件与模板域 | `rp_template` | 表示可长期复用的逻辑模板。模板本身不直接对应某个 DOCX 文件，具体文件由模板版本表管理。 |
-| 文件与模板域 | `rp_template_version` | 保存逻辑模板的不可变版本及其 DOCX 文件、解析状态、解析器版本和样式指纹。 |
-| 文件与模板域 | `rp_template_element` | 保存从某个模板版本中解析出的可绑定元素，是前端模板元素树和拖拽绑定的目标清单。 |
+| 文件存储域 | `rp_file_object` | 保存数据库文件的元数据、完整哈希、分片参数和生命周期状态。文件二进制不放在本表，避免普通元数据查询加载大 BLOB。 |
+| 文件存储域 | `rp_file_chunk` | 按文件和分片序号保存实际二进制内容。默认每片 4MiB，可流式上传、下载、校验和断点续传。 |
+| 文件存储域 | `rp_file_upload_session` | 保存大文件断点上传会话、进度、期望哈希、过期时间和失败原因。 |
+| 模板域 | `rp_template` | 表示可长期复用的逻辑模板。模板本身不直接对应某个 DOCX 文件，具体文件由模板版本表管理。 |
+| 模板域 | `rp_template_version` | 保存逻辑模板的不可变版本及其 DOCX 文件、解析状态、解析器版本和样式指纹。 |
+| 模板域 | `rp_template_element` | 保存从某个模板版本中解析出的可绑定元素，是前端模板元素树和拖拽绑定的目标清单。 |
 | 项目与章节域 | `rp_project` | 表示一份报告项目，保存当前项目状态、主模板版本、全局上下文版本和最终组装策略。 |
 | 项目与章节域 | `rp_project_member` | 保存用户在具体项目中的角色与成员状态，实现项目级权限控制。 |
 | 项目与章节域 | `rp_project_context_version` | 保存报告年份、单位名称、报告期等项目全局变量的不可变版本。 |
@@ -44,60 +59,33 @@
 | 生成与发布域 | `rp_release_chapter` | 保存正式发布中包含的章节顺序、章节版本、章节产物和数据快照清单。 |
 | 审计域 | `rp_audit_log` | 保存不可变的业务审计日志，记录操作人、对象、修改前后内容和请求链路。 |
 
-## 3. 核心关系概览
+## 4. 文件上传、校验与下载流程
 
-```mermaid
-erDiagram
-    rp_template ||--o{ rp_template_version : "fk_rp_tv_template"
-    rp_file_object ||--o{ rp_template_version : "fk_rp_tv_file"
-    rp_template_version ||--o{ rp_template_element : "fk_rp_te_version"
-    rp_template_version ||--o{ rp_project : "fk_rp_project_master_tv"
-    rp_project ||--o{ rp_project_member : "fk_rp_member_project"
-    rp_project ||--o{ rp_project_context_version : "fk_rp_context_project"
-    rp_project ||--o{ rp_chapter : "fk_rp_chapter_project"
-    rp_chapter ||--o{ rp_chapter : "fk_rp_chapter_parent"
-    rp_chapter_revision ||--o{ rp_chapter : "fk_rp_chapter_current_revision"
-    rp_project ||--o{ rp_data_connection : "fk_rp_connection_project"
-    rp_project ||--o{ rp_data_source : "fk_rp_ds_project"
-    rp_data_connection ||--o{ rp_data_source : "fk_rp_ds_connection"
-    rp_data_source ||--o{ rp_data_snapshot : "fk_rp_snapshot_source"
-    rp_file_object ||--o{ rp_data_snapshot : "fk_rp_snapshot_file"
-    rp_data_snapshot ||--o{ rp_data_field : "fk_rp_field_snapshot"
-    rp_chapter ||--o{ rp_binding_set : "fk_rp_bs_chapter"
-    rp_template_version ||--o{ rp_binding_set : "fk_rp_bs_template_version"
-    rp_binding_set ||--o{ rp_binding_item : "fk_rp_bi_set"
-    rp_template_element ||--o{ rp_binding_item : "fk_rp_bi_element"
-    rp_data_source ||--o{ rp_binding_item : "fk_rp_bi_source"
-    rp_chapter ||--o{ rp_chapter_revision : "fk_rp_cr_chapter"
-    rp_template_version ||--o{ rp_chapter_revision : "fk_rp_cr_template_version"
-    rp_binding_set ||--o{ rp_chapter_revision : "fk_rp_cr_binding_set"
-    rp_chapter ||--o{ rp_chapter_lock : "fk_rp_lock_chapter"
-    rp_project ||--o{ rp_generation_job : "fk_rp_job_project"
-    rp_generation_job ||--o{ rp_generation_job : "fk_rp_job_retry"
-    rp_generation_job ||--o{ rp_generation_job_snapshot : "fk_rp_gjs_job"
-    rp_data_source ||--o{ rp_generation_job_snapshot : "fk_rp_gjs_source"
-    rp_data_snapshot ||--o{ rp_generation_job_snapshot : "fk_rp_gjs_snapshot"
-    rp_project ||--o{ rp_artifact : "fk_rp_artifact_project"
-    rp_generation_job ||--o{ rp_artifact : "fk_rp_artifact_job"
-    rp_chapter ||--o{ rp_artifact : "fk_rp_artifact_chapter"
-    rp_file_object ||--o{ rp_artifact : "fk_rp_artifact_file"
-    rp_generation_job ||--o{ rp_generation_job_chapter : "fk_rp_gjc_job"
-    rp_chapter ||--o{ rp_generation_job_chapter : "fk_rp_gjc_chapter"
-    rp_chapter_revision ||--o{ rp_generation_job_chapter : "fk_rp_gjc_revision"
-    rp_artifact ||--o{ rp_generation_job_chapter : "fk_rp_gjc_artifact"
-    rp_project ||--o{ rp_release : "fk_rp_release_project"
-    rp_generation_job ||--o{ rp_release : "fk_rp_release_job"
-    rp_artifact ||--o{ rp_release : "fk_rp_release_artifact"
-    rp_release ||--o{ rp_release_chapter : "fk_rp_rc_release"
-    rp_chapter ||--o{ rp_release_chapter : "fk_rp_rc_chapter"
-    rp_chapter_revision ||--o{ rp_release_chapter : "fk_rp_rc_revision"
-    rp_artifact ||--o{ rp_release_chapter : "fk_rp_rc_artifact"
-```
+### 4.1 上传流程
 
-### 3.1 物理外键总表
+1. 创建 `rp_file_object`，状态设为 `UPLOADING`，写入文件名、预计大小、分片大小和逻辑键。
+2. 创建 `rp_file_upload_session`，生成唯一 `upload_token`。
+3. 客户端按 `chunk_no` 上传二进制分片；服务端计算分片 SHA-256 后写入 `rp_file_chunk`。
+4. 每片成功后原子更新上传会话进度；重复上传同一分片时必须校验哈希，不能静默覆盖不同内容。
+5. 完成请求触发服务端校验：分片必须从 0 连续到 `total_chunks - 1`，`SUM(chunk_length) = file_size`。
+6. 服务端按序读取分片重新计算完整 SHA-256。校验成功后将文件设为 `READY`，会话设为 `COMPLETED`。
 
-| 外键名 | 子表.字段 | 父表.字段 | 删除/更新策略 |
+### 4.2 下载流程
+
+1. 校验文件状态为 `READY` 且未软删除。
+2. 根据 `file_object_id` 查询 `rp_file_chunk`，按 `chunk_no ASC` 流式读取。
+3. 直接把 `chunk_data` 写入 HTTP 输出流，并设置 `Content-Length`、`Content-Type` 和下载文件名。
+
+### 4.3 删除流程
+
+业务删除只软删除 `rp_file_object`。定时物理清理时，只有在不存在模板版本、数据快照、产物等引用后才能删除文件对象；物理删除后分片和上传会话通过外键级联清理。
+
+## 5. 物理外键总表
+
+| 外键名 | 子表.字段 | 父表.字段 | 策略 |
 |---|---|---|---|
+| `fk_rp_file_chunk_object` | `rp_file_chunk.file_object_id` | `rp_file_object.id` | `ON DELETE CASCADE` |
+| `fk_rp_upload_file_object` | `rp_file_upload_session.file_object_id` | `rp_file_object.id` | `ON DELETE CASCADE` |
 | `fk_rp_tv_template` | `rp_template_version.template_id` | `rp_template.id` | `ON DELETE RESTRICT` |
 | `fk_rp_tv_file` | `rp_template_version.file_object_id` | `rp_file_object.id` | `ON DELETE RESTRICT` |
 | `fk_rp_te_version` | `rp_template_element.template_version_id` | `rp_template_version.id` | `ON DELETE CASCADE` |
@@ -143,43 +131,31 @@ erDiagram
 | `fk_rp_rc_revision` | `rp_release_chapter.chapter_revision_id` | `rp_chapter_revision.id` | `ON DELETE RESTRICT` |
 | `fk_rp_rc_artifact` | `rp_release_chapter.artifact_id` | `rp_artifact.id` | `ON DELETE SET NULL` |
 
-### 3.2 逻辑用户关联
-
-以下字段应由应用层关联现有用户系统，不建立 MySQL 物理外键：
-
-- `created_by`：创建人或上传人；
-- `updated_by`：最后修改人；
-- `published_by`：发布人；
-- `requested_by`：生成任务发起人；
-- `owner_user_id`：章节负责人或锁持有人；
-- `actor_user_id`：审计操作人；
-- `rp_project_member.user_id`：项目成员。
-
-若当前项目使用 RuoYi，可在代码层统一映射到 `sys_user.user_id`。如果用户表与报告平台位于同一数据库且确定不会拆分，也可以后续增加物理外键。
-
-## 4. 文件与模板域
+## 6. 文件存储域
 
 ### `rp_file_object`
 
-**表说明：** 统一记录上传文件和系统生成文件的存储元数据。数据库保存稳定的对象键，不保存短期签名 URL，也不保存大文件二进制。
+**作用：** 保存数据库文件的元数据、完整哈希、分片参数和生命周期状态。文件二进制不放在本表，避免普通元数据查询加载大 BLOB。
 
-**DDL 表注释：** 统一文件对象表
-
-| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 作用 |
+| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 详细作用 |
 |---|---|---:|---|---|---|
 | `id` | `BIGINT UNSIGNED` | 否 | — | PK | 表记录主键。 由数据库自增生成。 |
-| `storage_provider` | `VARCHAR(32)` | 否 | `'LOCAL'` | UK:uk_rp_file_object_key | 文件存储提供方，例如本地磁盘、MinIO、阿里云 OSS 或 S3。 |
-| `bucket_name` | `VARCHAR(128)` | 是 | `NULL` | UK:uk_rp_file_object_key | 对象存储桶名称；本地存储时可为空。 |
-| `object_key` | `VARCHAR(512)` | 否 | — | UK:uk_rp_file_object_key | 文件在存储系统中的稳定对象键。接口下载时根据它生成访问地址。 |
+| `storage_provider` | `VARCHAR(32)` | 否 | `'DATABASE'` | UK:uk_rp_file_object_key | 存储提供方。V2.1 固定使用 `DATABASE`，实际字节位于 `rp_file_chunk`。保留该字段用于兼容原有代码和未来迁移。 |
+| `bucket_name` | `VARCHAR(128)` | 否 | `'default'` | UK:uk_rp_file_object_key | 数据库文件逻辑命名空间，默认 `default`。它不再表示外部对象存储桶，并参与文件逻辑键唯一约束。 |
+| `object_key` | `VARCHAR(512)` | 否 | — | UK:uk_rp_file_object_key | 数据库内稳定逻辑文件键。用于定位业务文件，不能保存临时下载 URL。 |
 | `original_name` | `VARCHAR(255)` | 否 | — | — | 用户上传时的原始文件名。 |
 | `file_ext` | `VARCHAR(32)` | 是 | `NULL` | — | 文件扩展名，不含点号。 |
 | `mime_type` | `VARCHAR(128)` | 是 | `NULL` | — | 文件 MIME 类型。 |
 | `file_size` | `BIGINT UNSIGNED` | 否 | `0` | — | 文件字节数。 |
 | `sha256` | `CHAR(64)` | 是 | `NULL` | — | 文件内容 SHA-256，用于完整性校验、去重和版本追踪。 |
-| `object_status` | `VARCHAR(32)` | 否 | `'READY'` | — | 文件对象状态：上传中、就绪、隔离或已删除。 |
+| `chunk_size` | `INT UNSIGNED` | 否 | `4194304` | — | 该文件标准分片大小，单位字节。默认 4MiB；除最后一片外，各分片通常应等于该值。 |
+| `total_chunks` | `INT UNSIGNED` | 否 | `0` | — | 文件完成上传后应具有的分片总数。必须与 `rp_file_chunk` 实际行数一致。 |
+| `object_status` | `VARCHAR(32)` | 否 | `'UPLOADING'` | — | 文件生命周期状态。只有 `READY` 文件允许被模板、数据快照、生成产物等业务正式使用。 |
+| `upload_completed_at` | `DATETIME(3)` | 是 | `NULL` | — | 所有分片写入并完成完整文件大小、分片数量和 SHA-256 校验的时间。 |
 | `metadata_json` | `JSON` | 是 | `NULL` | — | 文件扩展元数据，例如图片尺寸、页数、编码、文档属性。 |
 | `created_by` | `BIGINT UNSIGNED` | 是 | `NULL` | 逻辑用户关联 | 创建人或上传人用户 ID，逻辑关联现有用户系统（如 RuoYi `sys_user.user_id`），不建立物理外键。 |
 | `created_at` | `DATETIME(3)` | 否 | `CURRENT_TIMESTAMP(3)` | — | 记录创建时间，使用毫秒精度。 |
+| `row_version` | `INT UNSIGNED` | 否 | `0` | — | 文件元数据乐观锁版本，更新上传状态、计数和完成时间时用于防止并发覆盖。 |
 | `deleted_at` | `DATETIME(3)` | 是 | `NULL` | — | 软删除时间；为空表示未删除。 |
 
 **主键：** `id`
@@ -191,17 +167,84 @@ erDiagram
 **普通索引：**
 
 - `idx_rp_file_sha256`：(`sha256`)
+- `idx_rp_file_status_time`：(`object_status`, `created_at`)
 - `idx_rp_file_created_at`：(`created_at`)
 
-**外键关联：** 无物理外键。
+**外键关联：**
+ 无物理外键。
+
+### `rp_file_chunk`
+
+**作用：** 按文件和分片序号保存实际二进制内容。默认每片 4MiB，可流式上传、下载、校验和断点续传。
+
+| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 详细作用 |
+|---|---|---:|---|---|---|
+| `file_object_id` | `BIGINT UNSIGNED` | 否 | — | PK<br>FK:fk_rp_file_chunk_object | 所属文件对象 ID，与 `chunk_no` 组成复合主键；物理删除文件对象时分片级联删除。 |
+| `chunk_no` | `INT UNSIGNED` | 否 | — | PK | 从 0 开始连续递增的分片序号。下载时必须按该字段升序流式输出。 |
+| `chunk_length` | `INT UNSIGNED` | 否 | — | — | 当前分片实际字节数。最后一片可以小于文件标准 `chunk_size`。 |
+| `chunk_sha256` | `CHAR(64)` | 否 | — | — | 当前分片 SHA-256，用于断点续传时校验单片内容和防止错误覆盖。 |
+| `chunk_data` | `MEDIUMBLOB` | 否 | — | — | 实际文件二进制分片。使用 `MEDIUMBLOB`，应用层默认控制在 4MiB，禁止 Base64 编码后再写入。 |
+| `created_at` | `DATETIME(3)` | 否 | `CURRENT_TIMESTAMP(3)` | — | 记录创建时间，使用毫秒精度。 |
+
+**主键：** `file_object_id`, `chunk_no`
+
+**唯一约束：**
+ 无。
+
+**普通索引：**
+ 无。
+
+**外键关联：**
+
+- `fk_rp_file_chunk_object`：(`file_object_id`) → `rp_file_object`(`id`)；策略：`ON DELETE CASCADE`。
+
+### `rp_file_upload_session`
+
+**作用：** 保存大文件断点上传会话、进度、期望哈希、过期时间和失败原因。
+
+| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 详细作用 |
+|---|---|---:|---|---|---|
+| `id` | `BIGINT UNSIGNED` | 否 | — | PK | 上传会话ID 由数据库自增生成。 |
+| `upload_token` | `CHAR(36)` | 否 | — | UK:uk_rp_file_upload_token | 上传会话 UUID。客户端上传分片、查询缺失分片、完成校验和取消上传时均应携带。 |
+| `file_object_id` | `BIGINT UNSIGNED` | 否 | — | FK:fk_rp_upload_file_object | 本次上传对应的文件元数据记录。创建上传会话前应先创建状态为 `UPLOADING` 的文件对象。 |
+| `expected_file_size` | `BIGINT UNSIGNED` | 否 | — | — | 客户端声明的完整文件字节数，完成上传时必须与分片字节总和一致。 |
+| `expected_sha256` | `CHAR(64)` | 是 | `NULL` | — | 客户端可选声明的完整文件 SHA-256；服务端完成上传后必须流式重算并比对。 |
+| `chunk_size` | `INT UNSIGNED` | 否 | `4194304` | — | 该上传会话约定的分片大小，应与对应文件对象的 `chunk_size` 一致。 |
+| `expected_chunks` | `INT UNSIGNED` | 否 | — | — | 根据完整文件大小和分片大小计算出的预计分片数。 |
+| `uploaded_chunks` | `INT UNSIGNED` | 否 | `0` | — | 已确认上传分片数量的进度缓存。最终完整性以查询 `rp_file_chunk` 为准。 |
+| `uploaded_bytes` | `BIGINT UNSIGNED` | 否 | `0` | — | 已确认上传字节数的进度缓存。最终完整性以分片实际字节总和为准。 |
+| `upload_status` | `VARCHAR(32)` | 否 | `'CREATED'` | — | 上传会话状态。完成前不得把文件对象状态设置为 `READY`。 |
+| `last_activity_at` | `DATETIME(3)` | 否 | `CURRENT_TIMESTAMP(3)` | — | 最近一次上传、续传、查询或校验时间，用于识别僵尸会话。 |
+| `expires_at` | `DATETIME(3)` | 否 | — | — | 会话过期时间。过期会话可由定时任务标记为 `EXPIRED` 并清理无引用分片。 |
+| `error_message` | `VARCHAR(2000)` | 是 | `NULL` | — | 上传或完整性校验失败的可读错误摘要。 |
+| `created_by` | `BIGINT UNSIGNED` | 是 | `NULL` | 逻辑用户关联 | 上传发起人 |
+| `created_at` | `DATETIME(3)` | 否 | `CURRENT_TIMESTAMP(3)` | — | 记录创建时间，使用毫秒精度。 |
+| `updated_at` | `DATETIME(3)` | 否 | `CURRENT_TIMESTAMP(3)` | — | 记录最后更新时间。 |
+| `row_version` | `INT UNSIGNED` | 否 | `0` | — | 乐观锁版本 |
+
+**主键：** `id`
+
+**唯一约束：**
+
+- `uk_rp_file_upload_token`：(`upload_token`)
+
+**普通索引：**
+
+- `idx_rp_upload_file_status`：(`file_object_id`, `upload_status`)
+- `idx_rp_upload_status_expire`：(`upload_status`, `expires_at`)
+
+**外键关联：**
+
+- `fk_rp_upload_file_object`：(`file_object_id`) → `rp_file_object`(`id`)；策略：`ON DELETE CASCADE`。
+
+
+## 7. 模板域
 
 ### `rp_template`
 
-**表说明：** 表示可长期复用的逻辑模板。模板本身不直接对应某个 DOCX 文件，具体文件由模板版本表管理。
+**作用：** 表示可长期复用的逻辑模板。模板本身不直接对应某个 DOCX 文件，具体文件由模板版本表管理。
 
-**DDL 表注释：** 逻辑模板表
-
-| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 作用 |
+| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 详细作用 |
 |---|---|---:|---|---|---|
 | `id` | `BIGINT UNSIGNED` | 否 | — | PK | 表记录主键。 由数据库自增生成。 |
 | `template_code` | `VARCHAR(64)` | 否 | — | UK:uk_rp_template_code | 逻辑模板稳定业务编码，创建后不应随名称修改。 |
@@ -228,15 +271,14 @@ erDiagram
 
 - `idx_rp_template_type_status`：(`template_type`, `template_status`)
 
-**外键关联：** 无物理外键。
+**外键关联：**
+ 无物理外键。
 
 ### `rp_template_version`
 
-**表说明：** 保存逻辑模板的不可变版本及其 DOCX 文件、解析状态、解析器版本和样式指纹。
+**作用：** 保存逻辑模板的不可变版本及其 DOCX 文件、解析状态、解析器版本和样式指纹。
 
-**DDL 表注释：** 不可变模板版本表
-
-| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 作用 |
+| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 详细作用 |
 |---|---|---:|---|---|---|
 | `id` | `BIGINT UNSIGNED` | 否 | — | PK | 模板版本主键。 由数据库自增生成。 |
 | `template_id` | `BIGINT UNSIGNED` | 否 | — | UK:uk_rp_template_version<br>UK:uk_rp_template_file<br>FK:fk_rp_tv_template | 所属逻辑模板 ID。 |
@@ -272,11 +314,9 @@ erDiagram
 
 ### `rp_template_element`
 
-**表说明：** 保存从某个模板版本中解析出的可绑定元素，是前端模板元素树和拖拽绑定的目标清单。
+**作用：** 保存从某个模板版本中解析出的可绑定元素，是前端模板元素树和拖拽绑定的目标清单。
 
-**DDL 表注释：** 模板可绑定元素清单
-
-| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 作用 |
+| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 详细作用 |
 |---|---|---:|---|---|---|
 | `id` | `BIGINT UNSIGNED` | 否 | — | PK | 模板元素主键。 由数据库自增生成。 |
 | `template_version_id` | `BIGINT UNSIGNED` | 否 | — | UK:uk_rp_template_element<br>FK:fk_rp_te_version | 关联具体、不可变的模板版本。 |
@@ -307,15 +347,14 @@ erDiagram
 
 - `fk_rp_te_version`：(`template_version_id`) → `rp_template_version`(`id`)；策略：`ON DELETE CASCADE`。
 
-## 5. 项目与章节域
+
+## 8. 项目与章节域
 
 ### `rp_project`
 
-**表说明：** 表示一份报告项目，保存当前项目状态、主模板版本、全局上下文版本和最终组装策略。
+**作用：** 表示一份报告项目，保存当前项目状态、主模板版本、全局上下文版本和最终组装策略。
 
-**DDL 表注释：** 报告项目表
-
-| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 作用 |
+| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 详细作用 |
 |---|---|---:|---|---|---|
 | `id` | `BIGINT UNSIGNED` | 否 | — | PK | 表记录主键。 由数据库自增生成。 |
 | `project_code` | `VARCHAR(64)` | 否 | — | UK:uk_rp_project_code | 项目稳定业务编码，供接口、目录和外部系统引用。 |
@@ -348,11 +387,9 @@ erDiagram
 
 ### `rp_project_member`
 
-**表说明：** 保存用户在具体项目中的角色与成员状态，实现项目级权限控制。
+**作用：** 保存用户在具体项目中的角色与成员状态，实现项目级权限控制。
 
-**DDL 表注释：** 项目级成员与权限
-
-| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 作用 |
+| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 详细作用 |
 |---|---|---:|---|---|---|
 | `project_id` | `BIGINT UNSIGNED` | 否 | — | PK<br>FK:fk_rp_member_project | 项目成员所属项目 ID。 |
 | `user_id` | `BIGINT UNSIGNED` | 否 | — | PK<br>逻辑用户关联 | 成员用户 ID，逻辑关联现有用户系统，不建立物理外键。 |
@@ -363,7 +400,8 @@ erDiagram
 
 **主键：** `project_id`, `user_id`
 
-**唯一约束：** 无
+**唯一约束：**
+ 无。
 
 **普通索引：**
 
@@ -375,11 +413,9 @@ erDiagram
 
 ### `rp_project_context_version`
 
-**表说明：** 保存报告年份、单位名称、报告期等项目全局变量的不可变版本。
+**作用：** 保存报告年份、单位名称、报告期等项目全局变量的不可变版本。
 
-**DDL 表注释：** 项目全局上下文不可变版本
-
-| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 作用 |
+| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 详细作用 |
 |---|---|---:|---|---|---|
 | `id` | `BIGINT UNSIGNED` | 否 | — | PK | 项目全局上下文版本主键。 由数据库自增生成。 |
 | `project_id` | `BIGINT UNSIGNED` | 否 | — | UK:uk_rp_project_context<br>FK:fk_rp_context_project | 所属报告项目 ID。 |
@@ -408,11 +444,9 @@ erDiagram
 
 ### `rp_chapter`
 
-**表说明：** 保存项目章节树、章节当前状态、当前版本和排序信息。该表表示章节的当前工作态，不直接承担历史版本职责。
+**作用：** 保存项目章节树、章节当前状态、当前版本和排序信息。该表表示章节的当前工作态，不直接承担历史版本职责。
 
-**DDL 表注释：** 章节树与当前状态
-
-| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 作用 |
+| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 详细作用 |
 |---|---|---:|---|---|---|
 | `id` | `BIGINT UNSIGNED` | 否 | — | PK | 表记录主键。 由数据库自增生成。 |
 | `project_id` | `BIGINT UNSIGNED` | 否 | — | UK:uk_rp_chapter_code<br>FK:fk_rp_chapter_project | 所属报告项目 ID。 |
@@ -451,11 +485,9 @@ erDiagram
 
 ### `rp_chapter_revision`
 
-**表说明：** 保存章节的不可变版本，固定章节标题、模板版本、绑定版本、全局上下文版本和章节设置。
+**作用：** 保存章节的不可变版本，固定章节标题、模板版本、绑定版本、全局上下文版本和章节设置。
 
-**DDL 表注释：** 不可变章节版本
-
-| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 作用 |
+| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 详细作用 |
 |---|---|---:|---|---|---|
 | `id` | `BIGINT UNSIGNED` | 否 | — | PK | 章节版本主键。 由数据库自增生成。 |
 | `chapter_id` | `BIGINT UNSIGNED` | 否 | — | UK:uk_rp_chapter_revision<br>FK:fk_rp_cr_chapter | 关联报告章节。 |
@@ -491,11 +523,9 @@ erDiagram
 
 ### `rp_chapter_lock`
 
-**表说明：** 保存章节编辑租约锁。通过令牌、心跳和过期时间避免永久锁，并配合章节乐观锁防止覆盖。
+**作用：** 保存章节编辑租约锁。通过令牌、心跳和过期时间避免永久锁，并配合章节乐观锁防止覆盖。
 
-**DDL 表注释：** 章节编辑租约锁
-
-| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 作用 |
+| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 详细作用 |
 |---|---|---:|---|---|---|
 | `chapter_id` | `BIGINT UNSIGNED` | 否 | — | PK<br>FK:fk_rp_lock_chapter | 被锁定章节 ID，也是该表主键，因此一个章节同时只能存在一条有效租约记录。 |
 | `lock_token` | `CHAR(36)` | 否 | — | UK:uk_rp_chapter_lock_token | 客户端持有的唯一租约令牌，续租和解锁时必须匹配。 |
@@ -521,15 +551,14 @@ erDiagram
 
 - `fk_rp_lock_chapter`：(`chapter_id`) → `rp_chapter`(`id`)；策略：`ON DELETE CASCADE`。
 
-## 6. 数据与绑定域
+
+## 9. 数据与绑定域
 
 ### `rp_data_connection`
 
-**表说明：** 保存数据库、API、SFTP 等数据连接的非敏感配置以及密钥引用。
+**作用：** 保存数据库、API、SFTP 等数据连接的非敏感配置以及密钥引用。
 
-**DDL 表注释：** 数据连接配置
-
-| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 作用 |
+| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 详细作用 |
 |---|---|---:|---|---|---|
 | `id` | `BIGINT UNSIGNED` | 否 | — | PK | 表记录主键。 由数据库自增生成。 |
 | `project_id` | `BIGINT UNSIGNED` | 是 | `NULL` | FK:fk_rp_connection_project | 所属报告项目 ID。 |
@@ -548,7 +577,8 @@ erDiagram
 
 **主键：** `id`
 
-**唯一约束：** 无
+**唯一约束：**
+ 无。
 
 **普通索引：**
 
@@ -560,11 +590,9 @@ erDiagram
 
 ### `rp_data_source`
 
-**表说明：** 定义一个业务数据源及其刷新方式。数据源描述“从哪里、如何取数”，不直接代表某次实际数据。
+**作用：** 定义一个业务数据源及其刷新方式。数据源描述“从哪里、如何取数”，不直接代表某次实际数据。
 
-**DDL 表注释：** 数据源逻辑定义
-
-| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 作用 |
+| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 详细作用 |
 |---|---|---:|---|---|---|
 | `id` | `BIGINT UNSIGNED` | 否 | — | PK | 表记录主键。 由数据库自增生成。 |
 | `project_id` | `BIGINT UNSIGNED` | 否 | — | UK:uk_rp_data_source_code<br>FK:fk_rp_ds_project | 所属报告项目 ID。 |
@@ -601,11 +629,9 @@ erDiagram
 
 ### `rp_data_snapshot`
 
-**表说明：** 保存数据源在某次抓取时得到的不可变数据快照，保证生成报告时能够复现。
+**作用：** 保存数据源在某次抓取时得到的不可变数据快照，保证生成报告时能够复现。
 
-**DDL 表注释：** 不可变数据快照
-
-| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 作用 |
+| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 详细作用 |
 |---|---|---:|---|---|---|
 | `id` | `BIGINT UNSIGNED` | 否 | — | PK | 数据快照主键。 由数据库自增生成。 |
 | `data_source_id` | `BIGINT UNSIGNED` | 否 | — | UK:uk_rp_data_snapshot<br>FK:fk_rp_snapshot_source | 关联逻辑数据源。 |
@@ -641,11 +667,9 @@ erDiagram
 
 ### `rp_data_field`
 
-**表说明：** 保存数据快照解析出的字段目录，供前端展示字段树并进行拖拽绑定。
+**作用：** 保存数据快照解析出的字段目录，供前端展示字段树并进行拖拽绑定。
 
-**DDL 表注释：** 数据快照字段目录，供前端拖拽绑定
-
-| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 作用 |
+| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 详细作用 |
 |---|---|---:|---|---|---|
 | `id` | `BIGINT UNSIGNED` | 否 | — | PK | 数据字段目录主键。 由数据库自增生成。 |
 | `snapshot_id` | `BIGINT UNSIGNED` | 否 | — | UK:uk_rp_data_field<br>FK:fk_rp_field_snapshot | 关联具体数据快照。 |
@@ -674,11 +698,9 @@ erDiagram
 
 ### `rp_binding_set`
 
-**表说明：** 保存一个章节完整绑定配置的版本头，固定模板版本并记录校验结果。
+**作用：** 保存一个章节完整绑定配置的版本头，固定模板版本并记录校验结果。
 
-**DDL 表注释：** 章节绑定配置版本
-
-| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 作用 |
+| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 详细作用 |
 |---|---|---:|---|---|---|
 | `id` | `BIGINT UNSIGNED` | 否 | — | PK | 绑定配置版本主键。 由数据库自增生成。 |
 | `chapter_id` | `BIGINT UNSIGNED` | 否 | — | UK:uk_rp_binding_set<br>FK:fk_rp_bs_chapter | 关联报告章节。 |
@@ -710,11 +732,9 @@ erDiagram
 
 ### `rp_binding_item`
 
-**表说明：** 保存一条具体绑定规则，将模板元素的某个属性绑定到项目上下文、数据字段、常量或受控表达式。
+**作用：** 保存一条具体绑定规则，将模板元素的某个属性绑定到项目上下文、数据字段、常量或受控表达式。
 
-**DDL 表注释：** 具体数据绑定项
-
-| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 作用 |
+| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 详细作用 |
 |---|---|---:|---|---|---|
 | `id` | `BIGINT UNSIGNED` | 否 | — | PK | 绑定明细主键。 由数据库自增生成。 |
 | `binding_set_id` | `BIGINT UNSIGNED` | 否 | — | UK:uk_rp_binding_target<br>FK:fk_rp_bi_set | 关联该章节版本使用的绑定配置版本。 |
@@ -748,15 +768,14 @@ erDiagram
 - `fk_rp_bi_element`：(`template_element_id`) → `rp_template_element`(`id`)；策略：`ON DELETE RESTRICT`。
 - `fk_rp_bi_source`：(`data_source_id`) → `rp_data_source`(`id`)；策略：`ON DELETE RESTRICT`。
 
-## 7. 生成与发布域
+
+## 10. 生成与发布域
 
 ### `rp_generation_job`
 
-**表说明：** 保存一次章节预览、项目预览或正式生成任务的总状态和固定输入清单。
+**作用：** 保存一次章节预览、项目预览或正式生成任务的总状态和固定输入清单。
 
-**DDL 表注释：** 报告生成任务
-
-| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 作用 |
+| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 详细作用 |
 |---|---|---:|---|---|---|
 | `id` | `BIGINT UNSIGNED` | 否 | — | PK | 生成任务主键。 由数据库自增生成。 |
 | `project_id` | `BIGINT UNSIGNED` | 否 | — | FK:fk_rp_job_project | 所属报告项目 ID。 |
@@ -780,7 +799,8 @@ erDiagram
 
 **主键：** `id`
 
-**唯一约束：** 无
+**唯一约束：**
+ 无。
 
 **普通索引：**
 
@@ -794,11 +814,9 @@ erDiagram
 
 ### `rp_generation_job_snapshot`
 
-**表说明：** 固定某次生成任务实际使用的各数据源快照，避免生成过程中数据发生变化。
+**作用：** 固定某次生成任务实际使用的各数据源快照，避免生成过程中数据发生变化。
 
-**DDL 表注释：** 生成任务固定的数据快照
-
-| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 作用 |
+| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 详细作用 |
 |---|---|---:|---|---|---|
 | `job_id` | `BIGINT UNSIGNED` | 否 | — | PK<br>FK:fk_rp_gjs_job | 使用该数据快照的生成任务 ID。 |
 | `data_source_id` | `BIGINT UNSIGNED` | 否 | — | PK<br>FK:fk_rp_gjs_source | 快照所属的数据源 ID，同时用于保证一个任务对一个数据源只选一个快照。 |
@@ -807,7 +825,8 @@ erDiagram
 
 **主键：** `job_id`, `data_source_id`
 
-**唯一约束：** 无
+**唯一约束：**
+ 无。
 
 **普通索引：**
 
@@ -821,11 +840,9 @@ erDiagram
 
 ### `rp_generation_job_chapter`
 
-**表说明：** 保存生成任务中每个章节的子任务状态、重试次数和输出产物。
+**作用：** 保存生成任务中每个章节的子任务状态、重试次数和输出产物。
 
-**DDL 表注释：** 生成任务的章节子任务
-
-| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 作用 |
+| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 详细作用 |
 |---|---|---:|---|---|---|
 | `id` | `BIGINT UNSIGNED` | 否 | — | PK | 生成章节子任务主键。 由数据库自增生成。 |
 | `job_id` | `BIGINT UNSIGNED` | 否 | — | UK:uk_rp_job_chapter<br>FK:fk_rp_gjc_job | 关联生成任务。 |
@@ -859,11 +876,9 @@ erDiagram
 
 ### `rp_artifact`
 
-**表说明：** 统一记录渲染和组装产生的 DOCX、PDF、HTML、图片及日志等文件产物。
+**作用：** 统一记录渲染和组装产生的 DOCX、PDF、HTML、图片及日志等文件产物。
 
-**DDL 表注释：** 生成产物
-
-| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 作用 |
+| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 详细作用 |
 |---|---|---:|---|---|---|
 | `id` | `BIGINT UNSIGNED` | 否 | — | PK | 生成产物主键。 由数据库自增生成。 |
 | `project_id` | `BIGINT UNSIGNED` | 否 | — | FK:fk_rp_artifact_project | 所属报告项目 ID。 |
@@ -882,7 +897,8 @@ erDiagram
 
 **主键：** `id`
 
-**唯一约束：** 无
+**唯一约束：**
+ 无。
 
 **普通索引：**
 
@@ -899,11 +915,9 @@ erDiagram
 
 ### `rp_release`
 
-**表说明：** 保存正式报告发布记录，关联成功生成任务、最终产物和完整版本清单。
+**作用：** 保存正式报告发布记录，关联成功生成任务、最终产物和完整版本清单。
 
-**DDL 表注释：** 正式报告发布记录
-
-| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 作用 |
+| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 详细作用 |
 |---|---|---:|---|---|---|
 | `id` | `BIGINT UNSIGNED` | 否 | — | PK | 正式发布主键。 由数据库自增生成。 |
 | `project_id` | `BIGINT UNSIGNED` | 否 | — | UK:uk_rp_release_no<br>FK:fk_rp_release_project | 所属报告项目 ID。 |
@@ -937,11 +951,9 @@ erDiagram
 
 ### `rp_release_chapter`
 
-**表说明：** 保存正式发布中包含的章节顺序、章节版本、章节产物和数据快照清单。
+**作用：** 保存正式发布中包含的章节顺序、章节版本、章节产物和数据快照清单。
 
-**DDL 表注释：** 发布版本的章节清单
-
-| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 作用 |
+| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 详细作用 |
 |---|---|---:|---|---|---|
 | `id` | `BIGINT UNSIGNED` | 否 | — | PK | 发布章节清单主键。 由数据库自增生成。 |
 | `release_id` | `BIGINT UNSIGNED` | 否 | — | UK:uk_rp_release_chapter<br>FK:fk_rp_rc_release | 关联正式发布记录。 |
@@ -968,15 +980,14 @@ erDiagram
 - `fk_rp_rc_revision`：(`chapter_revision_id`) → `rp_chapter_revision`(`id`)；策略：`ON DELETE RESTRICT`。
 - `fk_rp_rc_artifact`：(`artifact_id`) → `rp_artifact`(`id`)；策略：`ON DELETE SET NULL`。
 
-## 8. 审计域
+
+## 11. 审计域
 
 ### `rp_audit_log`
 
-**表说明：** 保存不可变的业务审计日志，记录操作人、对象、修改前后内容和请求链路。
+**作用：** 保存不可变的业务审计日志，记录操作人、对象、修改前后内容和请求链路。
 
-**DDL 表注释：** 不可变操作审计日志
-
-| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 作用 |
+| 字段 | 类型 | 允许空 | 默认值 | 键/关联 | 详细作用 |
 |---|---|---:|---|---|---|
 | `id` | `BIGINT UNSIGNED` | 否 | — | PK | 审计日志主键。 由数据库自增生成。 |
 | `project_id` | `BIGINT UNSIGNED` | 是 | `NULL` | — | 相关项目 ID，仅用于审计筛选；故意不建立物理外键。 |
@@ -994,7 +1005,8 @@ erDiagram
 
 **主键：** `id`
 
-**唯一约束：** 无
+**唯一约束：**
+ 无。
 
 **普通索引：**
 
@@ -1003,80 +1015,44 @@ erDiagram
 - `idx_rp_audit_entity`：(`entity_type`, `entity_id`, `created_at`)
 - `idx_rp_audit_request`：(`request_id`)
 
-**外键关联：** 无物理外键。
+**外键关联：**
+ 无物理外键。
 
-## 9. 关键状态值建议
+## 12. 文件存储应用层强制约束
 
-| 字段 | 建议值 |
-|---|---|
-| `rp_file_object.object_status` | `UPLOADING`、`READY`、`QUARANTINED`、`DELETED` |
-| `rp_template.template_type` | `MASTER`、`SECTION`、`COMPONENT` |
-| `rp_template.template_status` | `ACTIVE`、`DISABLED`、`ARCHIVED` |
-| `rp_template_version.version_status` | `UPLOADED`、`PARSING`、`READY`、`FAILED`、`RETIRED` |
-| `rp_template_element.element_type` | `TEXT`、`TABLE`、`CHART`、`IMAGE`、`REPEAT_BLOCK`、`CONDITION` |
-| `rp_project.project_status` | `DRAFT`、`CONFIGURING`、`READY`、`GENERATING`、`COMPLETED`、`ARCHIVED` |
-| `rp_project_member.project_role` | `OWNER`、`MANAGER`、`EDITOR`、`REVIEWER`、`VIEWER` |
-| `rp_chapter.workflow_status` | `PENDING`、`EDITING`、`BOUND`、`VALIDATED`、`READY`、`APPROVED` |
-| `rp_data_source.source_type` | `JSON`、`EXCEL`、`CSV`、`API`、`DATABASE`、`MANUAL` |
-| `rp_data_snapshot.snapshot_status` | `CAPTURING`、`READY`、`FAILED`、`EXPIRED` |
-| `rp_binding_set.binding_status` | `DRAFT`、`PUBLISHED`、`SUPERSEDED`、`INVALID` |
-| `rp_binding_set.validation_status` | `NOT_VALIDATED`、`VALID`、`WARNING`、`ERROR` |
-| `rp_chapter_revision.revision_status` | `DRAFT`、`PUBLISHED`、`SUPERSEDED` |
-| `rp_generation_job.job_type` | `CHAPTER_PREVIEW`、`PROJECT_PREVIEW`、`FINAL` |
-| `rp_generation_job.job_status` | `QUEUED`、`RUNNING`、`ASSEMBLING`、`SUCCEEDED`、`PARTIAL_FAILED`、`FAILED`、`CANCELLED` |
-| `rp_generation_job_chapter.task_status` | `QUEUED`、`RUNNING`、`SUCCEEDED`、`FAILED`、`SKIPPED` |
-| `rp_artifact.artifact_type` | `CHAPTER_DOCX`、`FINAL_DOCX`、`PDF`、`PREVIEW_HTML`、`PREVIEW_IMAGE`、`LOG` |
-| `rp_release.release_status` | `DRAFT`、`PUBLISHED`、`WITHDRAWN` |
+1. `rp_file_object.storage_provider` 新数据必须写入 `DATABASE`。
+2. `rp_file_object.total_chunks` 必须等于该文件在 `rp_file_chunk` 中的实际分片行数。
+3. `rp_file_object.file_size` 必须等于所有分片 `chunk_length` 之和。
+4. 同一文件的 `chunk_no` 必须从 0 开始连续，不能缺片或重复；复合主键阻止重复序号，但连续性仍由服务层校验。
+5. 除最后一片外，`chunk_length` 原则上必须等于 `rp_file_object.chunk_size`。
+6. `rp_file_chunk.chunk_sha256` 必须由服务端基于原始二进制计算，不能信任客户端结果。
+7. 上传会话中的计数字段仅用于进度显示，最终完成判断必须重新聚合分片表。
+8. 文件未达到 `READY` 状态时，不允许创建正式模板版本、正式数据快照或正式发布引用。
+9. 文件内容不可通过普通 ORM 实体的 `SELECT *` 加载；分片查询必须使用专门 Mapper/Repository。
+10. 清理过期上传时，只能删除未被正式业务引用且状态不为 `READY` 的文件对象。
 
-## 10. 应用层必须保证的约束
+## 13. MySQL 与连接配置建议
 
-1. `rp_project.current_context_version_no` 必须对应同一项目下存在的 `rp_project_context_version.version_no`；由于当前使用版本号快速定位而非版本 ID，该关系由服务层校验。
-2. `rp_chapter.current_revision_id` 必须指向当前章节自身的版本，而不能指向其他章节的版本。
-3. `rp_chapter_revision.binding_set_id` 必须属于同一个 `chapter_id`，且其 `template_version_id` 应与章节版本中的模板版本一致。
-4. `rp_binding_item.template_element_id` 必须属于 `rp_binding_set.template_version_id` 对应的模板版本。
-5. 当 `rp_binding_item.source_kind = 'DATA_SOURCE'` 时，`data_source_id` 与 `source_path` 必须有值；当来源为常量时应使用 `constant_value_json`。
-6. `rp_data_snapshot.content_json` 和 `file_object_id` 至少应有一个承载实际数据；大型数据优先使用文件对象。
-7. `rp_generation_job_snapshot.data_snapshot_id` 必须属于同一行的 `data_source_id`。
-8. `rp_generation_job_chapter.chapter_revision_id` 必须属于同一行的 `chapter_id`。
-9. `rp_release.final_artifact_id` 应属于 `generation_job_id` 对应任务，并且产物类型应为最终 DOCX 或 PDF。
-10. 正式生成任务创建后，`manifest_json` 和已选择的数据快照不得被修改；需要变更时创建新任务。
-11. 所有软删除查询默认增加 `deleted_at IS NULL`；审计、版本和发布记录通常禁止物理删除。
-12. 连接密码、Token、私钥等敏感信息禁止写入 `config_json`，只保存 `credential_ref`。
+- `max_allowed_packet` 必须大于单片大小及协议开销。默认 4MiB 分片时，建议至少配置为 16MiB 或 32MiB。
+- 根据并发上传量调整 InnoDB redo、磁盘空间、备份窗口和复制带宽；不要仅按业务表大小估算容量。
+- 确保数据库、备库和备份系统都能承载 BLOB 增长，且恢复演练包含文件分片表。
+- 上传接口和 JDBC 层必须使用流式二进制，不要调用会把整个文件读入 `byte[]` 的实现。
+- 分片写入建议一片一事务；完成校验和状态切换使用短事务。
+- 对 `rp_file_chunk` 不执行无条件全表扫描、`SELECT *` 或通用分页查询。
 
-## 11. 章节锁推荐事务
+## 14. 完整建表 SQL
 
-```sql
-START TRANSACTION;
-
-SELECT chapter_id, lock_token, owner_user_id, expires_at
-FROM rp_chapter_lock
-WHERE chapter_id = ?
-FOR UPDATE;
-
--- 应用层判断：
--- 1. 无记录：插入新租约；
--- 2. 同一用户/同一令牌：允许续租；
--- 3. expires_at < NOW(3)：允许替换过期租约；
--- 4. 其他情况：返回章节已被占用。
-
-COMMIT;
-```
-
-保存章节时仍应同时检查 `rp_chapter.row_version`，租约锁不能替代乐观锁。
-
-## 12. 完整建表 SQL
-
-以下 SQL 与独立的 `report_platform_v2_schema.sql` 文件内容一致。
+以下内容与独立文件 `report_platform_v2_1_schema_database_storage.sql` 一致。
 
 ```sql
 -- ============================================================
--- Report Platform V2 - MySQL 8.0+
+-- Report Platform V2.1 - MySQL 8.0+
 -- 适用场景：大文档拆分、多人协同、模板解析、数据绑定、并行渲染、最终组装与归档
 --
 -- 设计约定：
 -- 1. 用户、角色、组织机构优先复用现有认证系统（如 RuoYi sys_user/sys_role）。
 --    本脚本中的 created_by / user_id 等字段不建立跨系统外键。
--- 2. 数据库只存元数据、小型 JSON 和索引；DOCX、PDF、图片、大型 JSON/Excel 存对象存储。
+-- 2. 受部署限制，所有 DOCX、PDF、图片、Excel 和大型 JSON 均存入 MySQL；文件内容采用分片 BLOB 存储。
 -- 3. 模板版本、数据快照、章节版本、发布版本一经发布即不可修改。
 -- 4. 所有时间建议按 UTC 写入，接口层按用户时区展示。
 -- ============================================================
@@ -1091,29 +1067,74 @@ SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;
 
 -- ============================================================
--- 1. 统一文件对象
--- 不直接存可过期的访问 URL，而存稳定的 object_key。
+-- 1. 统一文件对象与数据库分片存储
+-- 所有 DOCX、PDF、Excel、图片及大型 JSON 均保存在 MySQL。
+-- rp_file_object 只保存元数据；文件字节统一写入 rp_file_chunk，
+-- 避免在元数据查询时加载大 BLOB，并支持流式上传、断点续传和分片校验。
 -- ============================================================
 CREATE TABLE rp_file_object (
     id                  BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '文件对象ID',
-    storage_provider    VARCHAR(32) NOT NULL DEFAULT 'LOCAL' COMMENT 'LOCAL/MINIO/OSS/S3',
-    bucket_name         VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT '存储桶',
-    object_key          VARCHAR(512) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '稳定对象键',
+    storage_provider    VARCHAR(32) NOT NULL DEFAULT 'DATABASE' COMMENT '固定为DATABASE，文件内容保存在rp_file_chunk',
+    bucket_name         VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'default' COMMENT '逻辑命名空间，不对应外部对象存储桶',
+    object_key          VARCHAR(512) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '数据库内稳定逻辑文件键',
     original_name       VARCHAR(255) NOT NULL COMMENT '原始文件名',
-    file_ext            VARCHAR(32) DEFAULT NULL COMMENT '扩展名',
+    file_ext            VARCHAR(32) DEFAULT NULL COMMENT '文件扩展名',
     mime_type           VARCHAR(128) DEFAULT NULL COMMENT 'MIME类型',
-    file_size           BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '文件大小（字节）',
-    sha256              CHAR(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT '内容SHA-256',
-    object_status       VARCHAR(32) NOT NULL DEFAULT 'READY' COMMENT 'UPLOADING/READY/QUARANTINED/DELETED',
-    metadata_json       JSON DEFAULT NULL COMMENT '宽高、页数、编码等扩展信息',
+    file_size           BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '完整文件大小（字节）',
+    sha256              CHAR(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT '完整文件内容SHA-256',
+    chunk_size          INT UNSIGNED NOT NULL DEFAULT 4194304 COMMENT '标准分片大小（字节），默认4MiB，最后一片可小于该值',
+    total_chunks        INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '文件完整分片数量',
+    object_status       VARCHAR(32) NOT NULL DEFAULT 'UPLOADING' COMMENT 'UPLOADING/VERIFYING/READY/QUARANTINED/FAILED/DELETED',
+    upload_completed_at DATETIME(3) DEFAULT NULL COMMENT '文件完整校验并转为READY的时间',
+    metadata_json       JSON DEFAULT NULL COMMENT '页数、宽高、编码、文档属性等扩展信息',
     created_by          BIGINT UNSIGNED DEFAULT NULL COMMENT '上传/创建人',
     created_at          DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    row_version         INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '乐观锁版本',
     deleted_at          DATETIME(3) DEFAULT NULL,
     PRIMARY KEY (id),
     UNIQUE KEY uk_rp_file_object_key (storage_provider, bucket_name, object_key),
     KEY idx_rp_file_sha256 (sha256),
+    KEY idx_rp_file_status_time (object_status, created_at),
     KEY idx_rp_file_created_at (created_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='统一文件对象表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='数据库文件对象元数据表';
+
+CREATE TABLE rp_file_chunk (
+    file_object_id      BIGINT UNSIGNED NOT NULL COMMENT '所属文件对象ID',
+    chunk_no            INT UNSIGNED NOT NULL COMMENT '分片序号，从0开始连续递增',
+    chunk_length        INT UNSIGNED NOT NULL COMMENT '当前分片实际字节数',
+    chunk_sha256        CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '当前分片SHA-256',
+    chunk_data          MEDIUMBLOB NOT NULL COMMENT '文件分片二进制内容，单片不得超过MEDIUMBLOB上限',
+    created_at          DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (file_object_id, chunk_no),
+    CONSTRAINT fk_rp_file_chunk_object
+        FOREIGN KEY (file_object_id) REFERENCES rp_file_object(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci ROW_FORMAT=DYNAMIC COMMENT='数据库文件二进制分片表';
+
+CREATE TABLE rp_file_upload_session (
+    id                  BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '上传会话ID',
+    upload_token        CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '断点上传会话令牌（UUID）',
+    file_object_id      BIGINT UNSIGNED NOT NULL COMMENT '待上传文件对象ID',
+    expected_file_size  BIGINT UNSIGNED NOT NULL COMMENT '客户端声明的完整文件大小',
+    expected_sha256     CHAR(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT '客户端声明的完整文件SHA-256',
+    chunk_size          INT UNSIGNED NOT NULL DEFAULT 4194304 COMMENT '本次上传约定分片大小',
+    expected_chunks     INT UNSIGNED NOT NULL COMMENT '预计分片总数',
+    uploaded_chunks     INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '已确认写入的分片数，仅作进度缓存',
+    uploaded_bytes      BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '已确认写入字节数，仅作进度缓存',
+    upload_status       VARCHAR(32) NOT NULL DEFAULT 'CREATED' COMMENT 'CREATED/UPLOADING/VERIFYING/COMPLETED/FAILED/CANCELLED/EXPIRED',
+    last_activity_at    DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '最近一次上传或校验活动时间',
+    expires_at          DATETIME(3) NOT NULL COMMENT '会话过期时间',
+    error_message       VARCHAR(2000) DEFAULT NULL COMMENT '上传或校验失败原因',
+    created_by          BIGINT UNSIGNED DEFAULT NULL COMMENT '上传发起人',
+    created_at          DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    updated_at          DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    row_version         INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '乐观锁版本',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_rp_file_upload_token (upload_token),
+    KEY idx_rp_upload_file_status (file_object_id, upload_status),
+    KEY idx_rp_upload_status_expire (upload_status, expires_at),
+    CONSTRAINT fk_rp_upload_file_object
+        FOREIGN KEY (file_object_id) REFERENCES rp_file_object(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='数据库文件断点上传会话表';
 
 -- ============================================================
 -- 2. 模板：逻辑模板、不可变版本、解析出的可绑定元素
@@ -1142,7 +1163,7 @@ CREATE TABLE rp_template_version (
     id                  BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '模板版本ID',
     template_id         BIGINT UNSIGNED NOT NULL COMMENT '逻辑模板ID',
     version_no          INT UNSIGNED NOT NULL COMMENT '版本号，从1递增',
-    file_object_id      BIGINT UNSIGNED NOT NULL COMMENT 'DOCX文件对象',
+    file_object_id      BIGINT UNSIGNED NOT NULL COMMENT '数据库内DOCX文件对象',
     version_status      VARCHAR(32) NOT NULL DEFAULT 'UPLOADED' COMMENT 'UPLOADED/PARSING/READY/FAILED/RETIRED',
     parser_name         VARCHAR(64) DEFAULT NULL COMMENT '解析器名称',
     parser_version      VARCHAR(32) DEFAULT NULL COMMENT '解析器版本',
@@ -1332,7 +1353,7 @@ CREATE TABLE rp_data_snapshot (
     snapshot_no         BIGINT UNSIGNED NOT NULL COMMENT '数据源内递增快照号',
     snapshot_status     VARCHAR(32) NOT NULL DEFAULT 'CAPTURING' COMMENT 'CAPTURING/READY/FAILED/EXPIRED',
     content_json        JSON DEFAULT NULL COMMENT '小型数据直接保存',
-    file_object_id      BIGINT UNSIGNED DEFAULT NULL COMMENT '大型JSON/Excel/CSV等对象文件',
+    file_object_id      BIGINT UNSIGNED DEFAULT NULL COMMENT '大型JSON/Excel/CSV数据库文件对象',
     schema_json         JSON DEFAULT NULL COMMENT '本次快照实际结构',
     content_hash        CHAR(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,
     row_count           BIGINT UNSIGNED DEFAULT NULL,

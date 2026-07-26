@@ -2,6 +2,7 @@
   <ItemGroup>
     <ProjectReference Include="../WordTemplateBinding.Core/WordTemplateBinding.Core.csproj" />
     <PackageReference Include="DocumentFormat.OpenXml" />
+    <PackageReference Include="MySqlConnector" />
   </ItemGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
