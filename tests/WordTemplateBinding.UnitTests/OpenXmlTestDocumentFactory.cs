@@ -43,6 +43,23 @@ internal static class OpenXmlTestDocumentFactory
     }
 
     /// <summary>
+    /// 创建一个使用 w:shd 黄色填充标记文本的 DOCX。
+    /// </summary>
+    internal static byte[] CreateShadedParagraphDocument(string text)
+    {
+        Paragraph paragraph = new(
+            new Run(
+                new RunProperties(
+                    new Shading
+                    {
+                        Val = ShadingPatternValues.Clear,
+                        Fill = "FFFF00",
+                    }),
+                new Text(text)));
+        return CreateDocument(paragraph);
+    }
+
+    /// <summary>
     /// 创建包含多个纯文本段落的 DOCX。
     /// </summary>
     /// <param name="paragraphTexts">段落文本。</param>

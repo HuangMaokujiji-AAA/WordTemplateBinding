@@ -100,6 +100,30 @@ public sealed class ApiExceptionHandler
                     "资源不存在",
                     business.ErrorCode,
                     business.Message),
+            WorkspaceException business
+                when business.ErrorCode.EndsWith(
+                    "_not_found",
+                    StringComparison.Ordinal) => (
+                    StatusCodes.Status404NotFound,
+                    "资源不存在",
+                    business.ErrorCode,
+                    business.Message),
+            TemplatePersistenceException business
+                when business.ErrorCode.EndsWith(
+                    "_not_found",
+                    StringComparison.Ordinal) => (
+                    StatusCodes.Status404NotFound,
+                    "资源不存在",
+                    business.ErrorCode,
+                    business.Message),
+            DatabaseFileException business
+                when business.ErrorCode.EndsWith(
+                    "_not_found",
+                    StringComparison.Ordinal) => (
+                    StatusCodes.Status404NotFound,
+                    "资源不存在",
+                    business.ErrorCode,
+                    business.Message),
             BindingValidationException or EmptyBindingsException or
                 EmptyReusableTemplateBindingsException or ReusableTemplateRenderingException
                 when exception is WordTemplateBindingException business => (
@@ -119,6 +143,11 @@ public sealed class ApiExceptionHandler
                 "报告生成失败",
                 business.ErrorCode,
                 business.Message),
+            BadHttpRequestException badRequest => (
+                StatusCodes.Status400BadRequest,
+                "请求无法处理",
+                "bad_request",
+                badRequest.Message),
             WordTemplateBindingException business => (
                 StatusCodes.Status400BadRequest,
                 "请求无法处理",

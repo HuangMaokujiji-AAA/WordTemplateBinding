@@ -13,6 +13,9 @@ public sealed class YellowHighlightRecognizer : IMockDataRecognizer
 {
     private readonly Regex _decimalRegex;
     private readonly Regex _integerRegex;
+    private readonly bool _enableHighlight;
+    private readonly bool _enableShading;
+    private readonly HashSet<string> _yellowFillColors;
 
     /// <summary>
     /// 初始化黄色高亮识别器。
@@ -26,6 +29,12 @@ public sealed class YellowHighlightRecognizer : IMockDataRecognizer
         _integerRegex = ConfiguredRegexFactory.Create(
             options.MockIntegerPattern,
             options.RegexTimeoutMilliseconds);
+        _enableHighlight = options.EnableYellowHighlightRecognition;
+        _enableShading = options.EnableYellowShadingRecognition;
+        _yellowFillColors = options.YellowFillColors
+            .Select(NormalizeFill)
+            .Where(value => value.Length == 6)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
 
     /// <inheritdoc />
@@ -97,6 +106,10 @@ public sealed class YellowHighlightRecognizer : IMockDataRecognizer
             Value = value,
             OriginalText = value,
             DataType = InferDataType(value),
+            RecognitionKind = IsFullMatch(_decimalRegex, value) ||
+                IsFullMatch(_integerRegex, value)
+                    ? "YellowNumber"
+                    : "YellowHighlight",
         });
     }
 
@@ -118,10 +131,26 @@ public sealed class YellowHighlightRecognizer : IMockDataRecognizer
         return match.Success && match.Index == 0 && match.Length == value.Length;
     }
 
-    private static bool IsYellowHighlight(TextSegment segment)
+    private bool IsYellowHighlight(TextSegment segment)
     {
         Run? run = segment.TextNode.Ancestors<Run>().FirstOrDefault();
-        Highlight? highlight = run?.RunProperties?.GetFirstChild<Highlight>();
-        return highlight?.Val?.Value == HighlightColorValues.Yellow;
+        RunProperties? properties = run?.RunProperties;
+        Highlight? highlight = properties?.GetFirstChild<Highlight>();
+        if (_enableHighlight && highlight?.Val?.Value == HighlightColorValues.Yellow)
+        {
+            return true;
+        }
+
+        if (!_enableShading)
+        {
+            return false;
+        }
+
+        Shading? shading = properties?.GetFirstChild<Shading>();
+        string fill = NormalizeFill(shading?.Fill?.Value);
+        return fill.Length == 6 && _yellowFillColors.Contains(fill);
     }
+
+    private static string NormalizeFill(string? value) =>
+        (value ?? string.Empty).Trim().TrimStart('#').ToUpperInvariant();
 }

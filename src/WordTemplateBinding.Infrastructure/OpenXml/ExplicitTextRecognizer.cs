@@ -51,6 +51,7 @@ public sealed class ExplicitTextRecognizer : IMockDataRecognizer
                 OriginalText = match.Value,
                 DataType = MockDataType.String,
                 PlaceholderCandidatePath = valueGroup.Value,
+                RecognitionKind = "ExplicitPlaceholder",
             });
         }
 

@@ -113,6 +113,23 @@ public sealed class ScannerTests
     }
 
     /// <summary>
+    /// 验证 Word w:shd 黄色填充与标准 Highlight 使用相同的显式标记语义。
+    /// </summary>
+    [Fact]
+    public async Task ScanAsync_YellowShading_ReturnsExplicitRange()
+    {
+        byte[] bytes =
+            OpenXmlTestDocumentFactory.CreateShadedParagraphDocument("底纹标记");
+
+        TemplateScanResult result = await _scanner.ScanAsync(bytes);
+
+        MockDataItem item = Assert.Single(result.MockItems);
+        Assert.Equal("底纹标记", item.MockValue);
+        Assert.Equal("YellowHighlight", item.RecognitionKind);
+        Assert.Equal(MockDataType.String, item.DataType);
+    }
+
+    /// <summary>
     /// 验证连续的黄色 Run 会合并为一个人工标记范围。
     /// </summary>
     [Fact]

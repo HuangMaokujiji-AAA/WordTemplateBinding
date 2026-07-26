@@ -11,7 +11,7 @@ using WordTemplateBinding.Core.Options;
 namespace WordTemplateBinding.Infrastructure.OpenXml;
 
 /// <summary>
-/// 扫描主文档正文和页脚中受支持的模拟数据并生成结构化定位与预览。
+/// 扫描 DOCX 的正文、页眉页脚、脚注尾注和文本框，并生成结构化定位。
 /// </summary>
 public sealed class WordTemplateScanner : IWordTemplateScanner
 {
@@ -23,10 +23,6 @@ public sealed class WordTemplateScanner : IWordTemplateScanner
     /// <summary>
     /// 初始化 Word 模板扫描器。
     /// </summary>
-    /// <param name="recognizers">模拟数据识别器集合。</param>
-    /// <param name="locatorIdGenerator">定位标识生成器。</param>
-    /// <param name="previewBuilder">结构化预览构建器。</param>
-    /// <param name="options">模板处理配置。</param>
     public WordTemplateScanner(
         IEnumerable<IMockDataRecognizer> recognizers,
         ILocatorIdGenerator locatorIdGenerator,
@@ -40,29 +36,47 @@ public sealed class WordTemplateScanner : IWordTemplateScanner
     }
 
     /// <inheritdoc />
-    public Task<TemplateScanResult> ScanAsync(
+    public async Task<TemplateScanResult> ScanAsync(
         ReadOnlyMemory<byte> templateBytes,
         CancellationToken cancellationToken = default)
     {
+        using MemoryStream stream = new(templateBytes.ToArray(), writable: false);
+        return await ScanAsync(stream, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<TemplateScanResult> ScanAsync(
+        Stream seekableDocxStream,
+        CancellationToken cancellationToken = default)
+    {
         cancellationToken.ThrowIfCancellationRequested();
+        if (!seekableDocxStream.CanRead || !seekableDocxStream.CanSeek)
+        {
+            throw new InvalidTemplateFileException("OpenXML 扫描需要可读、可定位的 DOCX 流。");
+        }
 
         try
         {
-            using MemoryStream stream = new(templateBytes.ToArray(), writable: false);
-            using WordprocessingDocument document = WordprocessingDocument.Open(stream, false);
+            seekableDocxStream.Position = 0;
+            string contentHash = await ComputeHashAsync(
+                seekableDocxStream,
+                cancellationToken);
+            seekableDocxStream.Position = 0;
+
+            using WordprocessingDocument document =
+                WordprocessingDocument.Open(seekableDocxStream, false);
             ValidateDocument(document);
 
             MainDocumentPart mainPart = document.MainDocumentPart
                 ?? throw new InvalidTemplateFileException("DOCX 缺少主文档部件。");
             Body body = mainPart.Document?.Body
                 ?? throw new InvalidTemplateFileException("DOCX 缺少主文档正文。");
-            string contentHash = Convert.ToHexString(SHA256.HashData(templateBytes.Span))
-                .ToLowerInvariant();
             List<string> paragraphTexts = new();
             List<MockDataItem> mockItems = new();
+            List<TemplateParseWarning> warnings = new();
 
-            ScanPart(
-                OpenXmlDocumentHelpers.GetMainDocumentParagraphs(body),
+            ScanPartAndTextBoxes(
+                body,
                 DocumentPartKind.MainDocument,
                 OpenXmlDocumentHelpers.MainDocumentPartKey,
                 contentHash,
@@ -70,22 +84,67 @@ public sealed class WordTemplateScanner : IWordTemplateScanner
                 mockItems,
                 cancellationToken);
 
+            foreach (HeaderPart headerPart in mainPart.HeaderParts
+                         .OrderBy(part => part.Uri.OriginalString, StringComparer.Ordinal))
+            {
+                if (headerPart.Header is not null)
+                {
+                    ScanPartAndTextBoxes(
+                        headerPart.Header,
+                        DocumentPartKind.Header,
+                        headerPart.Uri.OriginalString,
+                        contentHash,
+                        paragraphTexts,
+                        mockItems,
+                        cancellationToken);
+                }
+            }
+
             foreach (FooterPart footerPart in mainPart.FooterParts
                          .OrderBy(part => part.Uri.OriginalString, StringComparer.Ordinal))
             {
-                if (footerPart.Footer is null)
+                if (footerPart.Footer is not null)
                 {
-                    continue;
+                    ScanPartAndTextBoxes(
+                        footerPart.Footer,
+                        DocumentPartKind.Footer,
+                        footerPart.Uri.OriginalString,
+                        contentHash,
+                        paragraphTexts,
+                        mockItems,
+                        cancellationToken);
                 }
+            }
 
-                ScanPart(
-                    OpenXmlDocumentHelpers.GetTextParagraphs(footerPart.Footer),
-                    DocumentPartKind.Footer,
-                    footerPart.Uri.OriginalString,
+            if (mainPart.FootnotesPart?.Footnotes is { } footnotes)
+            {
+                ScanPartAndTextBoxes(
+                    footnotes,
+                    DocumentPartKind.Footnote,
+                    mainPart.FootnotesPart.Uri.OriginalString,
                     contentHash,
                     paragraphTexts,
                     mockItems,
                     cancellationToken);
+            }
+
+            if (mainPart.EndnotesPart?.Endnotes is { } endnotes)
+            {
+                ScanPartAndTextBoxes(
+                    endnotes,
+                    DocumentPartKind.Endnote,
+                    mainPart.EndnotesPart.Uri.OriginalString,
+                    contentHash,
+                    paragraphTexts,
+                    mockItems,
+                    cancellationToken);
+            }
+
+            if (FindThemeFill(document))
+            {
+                warnings.Add(new TemplateParseWarning(
+                    "YELLOW_THEME_COLOR_UNRESOLVED",
+                    "发现主题色底纹；主题色无法安全判定为黄色，相关范围未自动标记。"));
             }
 
             IReadOnlyList<ChartTemplateItem> charts = OpenXmlChartReader.Read(
@@ -93,16 +152,23 @@ public sealed class WordTemplateScanner : IWordTemplateScanner
                 contentHash,
                 _locatorIdGenerator);
             ReusableTemplateManifest manifest = ReusableTemplateManifestSerializer.Read(mainPart);
+            if (mockItems.Count == 0 && charts.Count == 0)
+            {
+                warnings.Add(new TemplateParseWarning(
+                    "NO_BINDABLE_ELEMENTS",
+                    "模板中暂未识别到可绑定标记。"));
+            }
 
             IReadOnlyList<MockDataItem> readOnlyItems = mockItems.AsReadOnly();
-            return Task.FromResult(new TemplateScanResult
+            return new TemplateScanResult
             {
                 ContentHash = contentHash,
                 MockItems = readOnlyItems,
                 Charts = charts,
                 Preview = _previewBuilder.Build(paragraphTexts.AsReadOnly(), readOnlyItems),
                 BindingManifest = manifest,
-            });
+                Warnings = warnings.AsReadOnly(),
+            };
         }
         catch (InvalidTemplateFileException)
         {
@@ -126,9 +192,50 @@ public sealed class WordTemplateScanner : IWordTemplateScanner
         }
     }
 
-    /// <summary>
-    /// 扫描一个独立 Word 文档部件中的段落，并使用部件内段落索引生成定位。
-    /// </summary>
+    private void ScanPartAndTextBoxes(
+        OpenXmlElement root,
+        DocumentPartKind partKind,
+        string partKey,
+        string contentHash,
+        ICollection<string> paragraphTexts,
+        ICollection<MockDataItem> mockItems,
+        CancellationToken cancellationToken)
+    {
+        ScanPart(
+            OpenXmlDocumentHelpers.GetTextParagraphs(root),
+            partKind,
+            partKey,
+            contentHash,
+            paragraphTexts,
+            mockItems,
+            cancellationToken);
+
+        IReadOnlyList<TextBoxContent> textBoxes = root
+            .Descendants<TextBoxContent>()
+            .ToList()
+            .AsReadOnly();
+        for (int textBoxIndex = 0; textBoxIndex < textBoxes.Count; textBoxIndex++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            IReadOnlyList<Paragraph> textBoxParagraphs = textBoxes[textBoxIndex]
+                .Descendants<Paragraph>()
+                .Where(paragraph =>
+                    ReferenceEquals(
+                        paragraph.Ancestors<TextBoxContent>().FirstOrDefault(),
+                        textBoxes[textBoxIndex]))
+                .ToList()
+                .AsReadOnly();
+            ScanPart(
+                textBoxParagraphs,
+                DocumentPartKind.TextBox,
+                $"{partKey}#textbox:{textBoxIndex}",
+                contentHash,
+                paragraphTexts,
+                mockItems,
+                cancellationToken);
+        }
+    }
+
     private void ScanPart(
         IReadOnlyList<Paragraph> paragraphs,
         DocumentPartKind partKind,
@@ -148,9 +255,7 @@ public sealed class WordTemplateScanner : IWordTemplateScanner
             List<RecognizedMockData> recognized = ResolveOverlaps(
                 _recognizers.SelectMany(recognizer => recognizer
                     .Recognize(map)
-                    .Select(item => new PrioritizedRecognition(
-                        item,
-                        recognizer.Priority))));
+                    .Select(item => new PrioritizedRecognition(item, recognizer.Priority))));
 
             for (int occurrenceIndex = 0; occurrenceIndex < recognized.Count; occurrenceIndex++)
             {
@@ -182,22 +287,36 @@ public sealed class WordTemplateScanner : IWordTemplateScanner
                     IsBound = false,
                     BoundDataPath = null,
                     PlaceholderCandidatePath = item.PlaceholderCandidatePath,
+                    RecognitionKind = item.RecognitionKind,
+                    ContentControlTag = ResolveContentControlTag(
+                        map,
+                        item.StartOffset,
+                        item.Length),
                 });
             }
         }
     }
 
-    /// <summary>
-    /// 将多个识别器的结果合并为互不重叠的定位范围。
-    /// </summary>
-    /// <param name="candidates">全部候选识别结果。</param>
-    /// <returns>返回按起始位置排列的非重叠结果。</returns>
+    private static string? ResolveContentControlTag(
+        ParagraphTextMap map,
+        int startOffset,
+        int length)
+    {
+        int endOffset = startOffset + length;
+        return map.Segments
+            .Where(segment =>
+                segment.StartOffset < endOffset &&
+                segment.EndOffset > startOffset)
+            .SelectMany(segment => segment.TextNode.Ancestors<SdtElement>())
+            .Select(element => element.SdtProperties?.GetFirstChild<Tag>()?.Val?.Value)
+            .FirstOrDefault(value =>
+                value?.StartsWith("rtb-marker:", StringComparison.OrdinalIgnoreCase) == true);
+    }
+
     private static List<RecognizedMockData> ResolveOverlaps(
         IEnumerable<PrioritizedRecognition> candidates)
     {
         List<PrioritizedRecognition> selected = new();
-
-        // 人工意图优先于自动推断；同优先级仍保持原有的“较早起点、同起点较长范围”规则。
         foreach (PrioritizedRecognition candidate in candidates
                      .OrderByDescending(item => item.Priority)
                      .ThenBy(item => item.Item.StartOffset)
@@ -210,12 +329,10 @@ public sealed class WordTemplateScanner : IWordTemplateScanner
                 return candidate.Item.StartOffset < existingEnd &&
                     existing.Item.StartOffset < candidateEnd;
             });
-            if (overlaps)
+            if (!overlaps)
             {
-                continue;
+                selected.Add(candidate);
             }
-
-            selected.Add(candidate);
         }
 
         return selected
@@ -224,14 +341,29 @@ public sealed class WordTemplateScanner : IWordTemplateScanner
             .ToList();
     }
 
-    private sealed record PrioritizedRecognition(
-        RecognizedMockData Item,
-        MockDataRecognitionPriority Priority);
+    private static bool FindThemeFill(WordprocessingDocument document)
+    {
+        OpenXmlPartRootElement? root = document.MainDocumentPart?.Document;
+        return root?.Descendants<Shading>().Any(shading =>
+            shading.ThemeFill is not null &&
+            string.IsNullOrWhiteSpace(shading.Fill?.Value)) == true;
+    }
 
-    /// <summary>
-    /// 校验文档类型以及主文档正文是否存在。
-    /// </summary>
-    /// <param name="document">已经打开的 Word 文档。</param>
+    private static async Task<string> ComputeHashAsync(
+        Stream source,
+        CancellationToken cancellationToken)
+    {
+        using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        byte[] buffer = new byte[64 * 1024];
+        int read;
+        while ((read = await source.ReadAsync(buffer, cancellationToken)) > 0)
+        {
+            hash.AppendData(buffer, 0, read);
+        }
+
+        return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+    }
+
     private static void ValidateDocument(WordprocessingDocument document)
     {
         if (document.DocumentType != WordprocessingDocumentType.Document)
@@ -244,4 +376,8 @@ public sealed class WordTemplateScanner : IWordTemplateScanner
             throw new InvalidTemplateFileException("DOCX 缺少主文档正文。");
         }
     }
+
+    private sealed record PrioritizedRecognition(
+        RecognizedMockData Item,
+        MockDataRecognitionPriority Priority);
 }

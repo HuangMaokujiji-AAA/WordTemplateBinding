@@ -38,18 +38,27 @@ builder.Services.AddProblemDetails(options =>
     };
 });
 builder.Services.AddReportPlatformDatabase(builder.Configuration);
-builder.Services.AddWordTemplateBinding(templateOptions);
+builder.Services.AddWordTemplateBinding(builder.Configuration, templateOptions);
 
 WebApplication app = builder.Build();
 app.UseMiddleware<ApiExceptionHandler>();
 app.UseStatusCodePages();
 app.UseDefaultFiles();
 app.UseStaticFiles();
-app.MapTemplateEndpoints();
-app.MapBindingEndpoints();
-app.MapDataSchemaEndpoints();
-app.MapReportEndpoints();
-app.MapChartAnalysisEndpoints();
+app.MapPersistentTemplateEndpoints();
+app.MapWorkspaceEndpoints();
+if (string.Equals(
+        builder.Configuration["Persistence:Mode"],
+        "InMemory",
+        StringComparison.OrdinalIgnoreCase))
+{
+    app.MapTemplateEndpoints();
+    app.MapBindingEndpoints();
+    app.MapDataSchemaEndpoints();
+    app.MapReportEndpoints();
+    app.MapChartAnalysisEndpoints();
+}
+
 app.MapDatabaseEndpoints();
 app.Run();
 

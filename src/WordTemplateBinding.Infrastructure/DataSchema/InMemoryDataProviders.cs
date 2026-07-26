@@ -356,7 +356,6 @@ public sealed class InMemoryDataValueProvider : IDataValueProvider
             ["ChartData.ScienceScores"] = MakeChartRows(
                 new[] { "Category", "你县", "全省" },
                 ("四年级", 552m, 506m),
-                ("六年级", 554m, 526m),
                 ("八年级", 518m, 493m)),
 
             // ── 季度销售 ──

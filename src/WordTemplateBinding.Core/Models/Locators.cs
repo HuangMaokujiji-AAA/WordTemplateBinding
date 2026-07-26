@@ -82,4 +82,9 @@ public sealed record RecognizedMockData
     /// 获取显式双花括号标记内部的候选字段路径。
     /// </summary>
     public string? PlaceholderCandidatePath { get; init; }
+
+    /// <summary>
+    /// 获取识别来源，例如 ExplicitPlaceholder、YellowHighlight 或 AutomaticInteger。
+    /// </summary>
+    public required string RecognitionKind { get; init; }
 }

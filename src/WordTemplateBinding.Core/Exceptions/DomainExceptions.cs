@@ -39,6 +39,70 @@ public sealed class TemplateNotFoundException : WordTemplateBindingException
         : base("template_not_found", $"找不到模板：{templateId}。")
     {
     }
+
+    /// <summary>
+    /// 初始化数据库模板不存在异常。
+    /// </summary>
+    public TemplateNotFoundException(ulong templateId)
+        : base("template_not_found", $"找不到模板：{templateId}。")
+    {
+    }
+}
+
+/// <summary>
+/// 表示数据库字符串 ID 无效。
+/// </summary>
+public sealed class InvalidDatabaseIdException : WordTemplateBindingException
+{
+    /// <summary>
+    /// 初始化数据库 ID 异常。
+    /// </summary>
+    public InvalidDatabaseIdException(string name)
+        : base("invalid_database_id", $"{name} 必须是大于 0 的无符号整数。")
+    {
+    }
+}
+
+/// <summary>
+/// 表示数据库文件不存在或不可用。
+/// </summary>
+public sealed class DatabaseFileException : WordTemplateBindingException
+{
+    /// <summary>
+    /// 初始化数据库文件异常。
+    /// </summary>
+    public DatabaseFileException(string errorCode, string message, Exception? inner = null)
+        : base(errorCode, message, inner)
+    {
+    }
+}
+
+/// <summary>
+/// 表示数据库模板版本或模板元素不存在。
+/// </summary>
+public sealed class TemplatePersistenceException : WordTemplateBindingException
+{
+    /// <summary>
+    /// 初始化模板持久化异常。
+    /// </summary>
+    public TemplatePersistenceException(string errorCode, string message, Exception? inner = null)
+        : base(errorCode, message, inner)
+    {
+    }
+}
+
+/// <summary>
+/// 表示项目、章节、数据源或绑定资源无效。
+/// </summary>
+public sealed class WorkspaceException : WordTemplateBindingException
+{
+    /// <summary>
+    /// 初始化工作区异常。
+    /// </summary>
+    public WorkspaceException(string errorCode, string message, Exception? inner = null)
+        : base(errorCode, message, inner)
+    {
+    }
 }
 
 /// <summary>

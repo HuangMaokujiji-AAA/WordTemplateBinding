@@ -40,6 +40,7 @@ public sealed class IntegerNumberRecognizer : IMockDataRecognizer
                 Value = match.Value,
                 OriginalText = match.Value,
                 DataType = MockDataType.Integer,
+                RecognitionKind = "AutomaticInteger",
             });
         }
 

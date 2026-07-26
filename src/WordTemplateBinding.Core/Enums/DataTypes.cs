@@ -55,6 +55,16 @@ public enum DataValueType
     /// 数组或集合节点。
     /// </summary>
     Array = 6,
+
+    /// <summary>
+    /// 结构化对象；当前仅展示，不允许直接绑定到文字。
+    /// </summary>
+    Object = 7,
+
+    /// <summary>
+    /// 二进制或数据库大对象；当前不可绑定。
+    /// </summary>
+    Binary = 8,
 }
 
 /// <summary>

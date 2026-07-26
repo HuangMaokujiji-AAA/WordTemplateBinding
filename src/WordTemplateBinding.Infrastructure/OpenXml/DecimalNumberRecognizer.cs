@@ -40,6 +40,7 @@ public sealed class DecimalNumberRecognizer : IMockDataRecognizer
                 Value = match.Value,
                 OriginalText = match.Value,
                 DataType = MockDataType.Decimal,
+                RecognitionKind = "AutomaticDecimal",
             });
         }
 

@@ -1,391 +1,344 @@
-# API 文档
+# HTTP API
 
-基础路径：`/api`
-
-除报告文件流外，错误统一使用 `application/problem+json` 风格响应：
+基础路径：`/api`。除 DOCX 文件响应外，错误使用 `application/problem+json`：
 
 ```json
 {
-  "type": "about:blank",
-  "title": "资源不存在",
-  "status": 404,
-  "detail": "找不到模板：00000000-0000-0000-0000-000000000000。",
-  "instance": "/api/templates/...",
-  "errorCode": "template_not_found",
+  "title": "请求无法处理",
+  "status": 400,
+  "detail": "templateId 必须是大于 0 的无符号整数。",
+  "errorCode": "invalid_database_id",
   "traceId": "..."
 }
 ```
 
-## 1. 上传模板
+所有来自 `BIGINT UNSIGNED` 的 ID 都是 JSON 字符串，例如 `"18446744073709551615"`，不得由 JavaScript 转为 `number`。
+
+## 1. 模板
+
+### 查询模板
 
 ```http
-POST /api/templates/upload
-Content-Type: multipart/form-data
-```
-
-表单字段：
-
-| 字段 | 类型 | 必填 | 说明 |
-| --- | --- | --- | --- |
-| `file` | DOCX 文件 | 是 | 最大值由 `MaxUploadSizeMb` 配置 |
-
-成功响应 `200`：
-
-```json
-{
-  "templateId": "f583f393-57ae-4a19-9845-5a93404fc27c",
-  "fileName": "template.docx",
-  "contentHash": "sha256-hex",
-  "mockItemCount": 1,
-  "chartCount": 1,
-  "bindingCount": 0,
-  "importSummary": {
-    "textBindingsRestored": 0,
-    "chartBindingsRestored": 0,
-    "unresolvedPlaceholders": [],
-    "warnings": []
-  },
-  "mockItems": [
-    {
-      "locatorId": "base64url",
-      "mockValue": "88.5",
-      "dataType": "Decimal",
-      "locator": {
-        "partKind": "MainDocument",
-        "partKey": "/word/document.xml",
-        "paragraphIndex": 0,
-        "startOffset": 11,
-        "length": 4,
-        "occurrenceIndex": 0,
-        "originalValue": "88.5",
-        "contextHash": "sha256-hex"
-      },
-      "paragraphText": "本年度学生平均成绩为 88.5 分。",
-      "previewParagraphIndex": 0,
-      "isBound": false,
-      "boundDataPath": null,
-      "boundDataType": null
-    }
-  ],
-  "charts": [
-    {
-      "locatorId": "chart-base64url",
-      "locator": {
-        "partKey": "/word/charts/chart1.xml",
-        "relationshipId": "rId7",
-        "documentOrder": 0
-      },
-      "chartType": "bar",
-      "title": "学生成绩",
-      "categories": ["四年级", "八年级"],
-      "series": [
-        { "seriesIndex": 0, "name": "你县", "values": [543, 505] },
-        { "seriesIndex": 1, "name": "全省", "values": [506, 493] }
-      ],
-      "isBindable": true,
-      "isBound": false,
-      "boundDataPath": null,
-      "boundDataType": null
-    }
-  ],
-  "preview": {
-    "paragraphs": [
-      {
-        "paragraphIndex": 0,
-        "text": "本年度学生平均成绩为 88.5 分。",
-        "highlights": [
-          {
-            "locatorId": "base64url",
-            "startOffset": 11,
-            "length": 4,
-            "mockValue": "88.5"
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-`mockItems[].dataType` 可能为 `Decimal`、`Integer` 或 `String`。Word 中使用标准黄色文本高亮标记的连续范围会优先成为一个候选；完整匹配数值规则时类型为 `Decimal` 或 `Integer`，否则为 `String`。文字也可使用 `{{text:示例文字}}` 显式标记；此时 `mockValue` 为内部文字，`locator.originalValue` 为包含标记语法的完整原文，生成报告时会替换整个标记。
-
-候选冲突优先级为：双花括号显式标记 > 黄色高亮 > 小数/整数正则。任何较低优先级候选只要与已选范围相交就会丢弃，因此 API 不会返回重叠的 `mockItems`。
-
-`charts[]` 表示主文档中的 Word 原生 ChartPart。图表只能绑定 `Array` 集合字段。
-
-`importSummary` 始终存在。上传普通 DOCX 时各计数和集合为空；上传复用模板时，后端会在扫描完成后根据 `{{完整数据路径}}` 与内嵌图表 Manifest 创建新 Locator 的绑定。路径匹配区分大小写且必须完全一致。未知字段或损坏 Manifest 不会拒绝整个模板，而是分别进入 `unresolvedPlaceholders` 或 `warnings`。
-
-错误：
-
-- `400 invalid_template_file`
-- `400 no_mock_data_found`
-- `413 template_too_large`
-
-## 2. 获取模板扫描结果
-
-```http
-GET /api/templates/{templateId}
-```
-
-返回模板信息、模拟数据、预览和当前绑定状态，响应结构与上传成功响应相同。
-
-错误：
-
-- `404 template_not_found`
-
-## 3. 重新扫描模板
-
-```http
-POST /api/templates/{templateId}/rescan
-```
-
-从内存中的不可变原始 DOCX 字节重新扫描。成功后删除不再存在的 Locator 绑定。
-
-扫描失败或没有识别结果时不会覆盖旧扫描状态。
-
-错误：
-
-- `404 template_not_found`
-- `400 invalid_template_file`
-- `400 no_mock_data_found`
-
-## 4. 获取或搜索 Schema
-
-完整树：
-
-```http
-GET /api/data-schema
-```
-
-搜索：
-
-```http
-GET /api/data-schema?query=AverageScore
+GET /api/templates?name=&code=&type=&status=&page=1&pageSize=20
 ```
 
 响应：
 
 ```json
 {
-  "query": "AverageScore",
-  "totalLeafCount": 3008,
-  "matchCount": 1,
-  "isTruncated": false,
-  "nodes": [
+  "items": [
     {
-      "name": "平均成绩",
-      "path": "StudentStatistics.AverageScore",
-      "type": "Decimal",
-      "isCollection": false,
-      "isLeaf": true,
-      "isBindable": true,
-      "children": []
+      "id": "12",
+      "templateCode": "ANNUAL_REPORT",
+      "templateName": "年度报告",
+      "templateType": "SECTION",
+      "templateStatus": "ACTIVE",
+      "currentVersionNo": 3
     }
-  ]
+  ],
+  "total": 1,
+  "page": 1,
+  "pageSize": 20
 }
 ```
 
-查询匹配名称或路径，忽略大小写，最多返回 200 项。
-
-## 5. 创建或更新绑定
+### 创建模板并上传首版本
 
 ```http
-POST /api/bindings
-Content-Type: application/json
+POST /api/templates
+Content-Type: multipart/form-data
 ```
 
-请求：
+字段：
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `file` | 是 | 普通 `.docx` |
+| `templateCode` | 是 | 字母、数字、`_`、`-`，最多 64 字符 |
+| `templateName` | 是 | 最多 255 字符 |
+| `templateType` | 否 | 默认 `SECTION` |
+| `categoryCode` | 否 | 分类编码 |
+| `description` | 否 | 描述 |
+
+成功 `201`，返回模板版本视图：
 
 ```json
 {
-  "templateId": "f583f393-57ae-4a19-9845-5a93404fc27c",
-  "locatorId": "base64url",
-  "dataPath": "StudentStatistics.AverageScore"
-}
-```
-
-成功响应：
-
-```json
-{
-  "success": true,
-  "binding": {
-    "templateId": "f583f393-57ae-4a19-9845-5a93404fc27c",
-    "targetKind": "Text",
-    "locatorId": "base64url",
-    "dataPath": "StudentStatistics.AverageScore",
-    "dataType": "Decimal",
-    "createdAt": "2026-07-17T00:00:00+00:00",
-    "updatedAt": "2026-07-17T00:00:00+00:00"
+  "template": {
+    "id": "12",
+    "templateCode": "ANNUAL_REPORT",
+    "currentVersionNo": 1
+  },
+  "version": {
+    "id": "31",
+    "templateId": "12",
+    "versionNo": 1,
+    "fileObjectId": "45",
+    "versionStatus": "READY",
+    "elementCount": 2
+  },
+  "file": {
+    "id": "45",
+    "originalName": "annual.docx",
+    "fileSize": 12345,
+    "sha256": "..."
+  },
+  "elements": [
+    {
+      "id": "101",
+      "templateVersionId": "31",
+      "elementType": "TEXT",
+      "locator": {
+        "locatorId": "base64url",
+        "partKind": "MainDocument",
+        "partKey": "/word/document.xml"
+      },
+      "bindingSchema": {
+        "targetProperty": "$",
+        "allowedTypes": [ "String", "Integer", "Decimal", "Date", "Boolean" ]
+      }
+    }
+  ],
+  "parseResult": {
+    "warnings": [],
+    "scanResult": {
+      "mockItems": [],
+      "charts": []
+    }
   }
 }
 ```
 
-同一模板和 Locator 再次提交会覆盖当前字段，但保留最初创建时间。
-
-图表绑定请求与文本请求结构相同，`locatorId` 使用 `charts[].locatorId`，`dataPath` 必须指向 `type: "Array"` 且 `isBindable: true` 的集合节点；成功响应中的 `targetKind` 为 `Chart`。
-
-错误：
-
-- `404 template_not_found`
-- `404 locator_not_found`
-- `404 data_field_not_found`
-- `409 binding_validation_failed`
-
-## 6. 获取绑定列表
+### 上传新版本
 
 ```http
-GET /api/templates/{templateId}/bindings
+POST /api/templates/{templateId}/versions
+Content-Type: multipart/form-data
 ```
 
-成功返回绑定数组。
+字段：`file`。返回 `201` 模板版本视图。
 
-错误：
-
-- `404 template_not_found`
-
-## 7. 删除绑定
+### 获取模板和版本
 
 ```http
-DELETE /api/templates/{templateId}/bindings/{locatorId}
+GET /api/templates/{templateId}
+GET /api/templates/{templateId}/versions
+GET /api/templates/{templateId}/current
+GET /api/template-versions/{versionId}
+GET /api/template-versions/{versionId}/elements
 ```
 
-成功响应：
+### 下载版本文件
+
+```http
+GET /api/template-versions/{versionId}/file
+```
+
+响应为原始 DOCX 流。服务端按数据库分片顺序输出并校验大小与完整 SHA-256。
+
+### 重扫
+
+```http
+POST /api/template-versions/{versionId}/rescan
+```
+
+重用原 `file_object_id`，替换该版本的元素目录并更新解析结果。
+
+## 2. 项目与章节
+
+```http
+GET  /api/projects
+POST /api/projects
+GET  /api/projects/{projectId}/chapters
+POST /api/projects/{projectId}/chapters
+```
+
+创建项目：
 
 ```json
 {
-  "success": true,
-  "deleted": true
+  "projectCode": "REPORT_2026",
+  "projectName": "2026 年度报告",
+  "description": "..."
 }
 ```
 
-重复删除时 `deleted` 为 `false`。
+创建章节：
 
-错误：
+```json
+{
+  "chapterCode": "CH01",
+  "title": "第一章",
+  "parentId": null,
+  "sortKey": 1
+}
+```
 
-- `404 template_not_found`
-
-## 8. 生成报告
+## 3. 数据连接
 
 ```http
-POST /api/reports/generate
-Content-Type: application/json
+GET  /api/data-connections?projectId={projectId}
+POST /api/data-connections
+POST /api/data-connections/{connectionId}/test
+GET  /api/data-connections/{connectionId}/schemas
+GET  /api/data-connections/{connectionId}/objects?schema=reporting
+GET  /api/data-connections/{connectionId}/columns?schema=reporting&objectName=student_score
 ```
 
-使用演示值：
+创建请求：
 
 ```json
 {
-  "templateId": "f583f393-57ae-4a19-9845-5a93404fc27c"
+  "projectId": "1",
+  "connectionName": "只读业务库",
+  "connectionType": "MYSQL",
+  "config": {
+    "host": "db.internal",
+    "port": 3306,
+    "database": "school",
+    "sslMode": "Required"
+  },
+  "credentialRef": "config:DataSourceCredentials:schoolDb"
 }
 ```
 
-覆盖部分演示值：
+响应不会包含账号、密码或连接串。
+
+## 4. 数据源、快照与字段
+
+```http
+GET  /api/data-sources?projectId={projectId}
+POST /api/data-sources
+POST /api/data-sources/{dataSourceId}/refresh
+GET  /api/data-sources/{dataSourceId}/snapshot
+GET  /api/data-sources/{dataSourceId}/fields?query=&limit=200
+GET  /api/data-sources/{dataSourceId}/schema?query=
+```
+
+创建数据库对象数据源：
 
 ```json
 {
-  "templateId": "f583f393-57ae-4a19-9845-5a93404fc27c",
-  "values": {
-    "StudentStatistics.AverageScore": 92.3
-  }
+  "projectId": "1",
+  "connectionId": "3",
+  "sourceCode": "STUDENT_SCORE",
+  "sourceName": "学生成绩",
+  "sourceType": "DATABASE",
+  "schemaName": "school",
+  "objectType": "BASE TABLE",
+  "objectName": "student_score"
 }
 ```
 
-覆盖图表集合值：
+刷新成功后创建不可变快照与字段目录。样例最多 20 行；Binary/BLOB 列不返回。
+
+## 5. 绑定集
+
+### 获取或创建草稿
+
+```http
+POST /api/binding-sets
+```
 
 ```json
 {
-  "templateId": "f583f393-57ae-4a19-9845-5a93404fc27c",
-  "values": {
-    "ChartData.ScienceScores": [
-      { "Category": "四年级", "你县": 552, "全省": 506 },
-      { "Category": "八年级", "你县": 518, "全省": 493 }
+  "chapterId": "7",
+  "templateVersionId": "31"
+}
+```
+
+相同章节和模板版本已有 DRAFT 时返回原草稿，否则创建递增版本。
+
+### 查询和保存绑定
+
+```http
+GET    /api/binding-sets/{bindingSetId}/items
+PUT    /api/binding-sets/{bindingSetId}/items/{templateElementId}
+DELETE /api/binding-sets/{bindingSetId}/items/{templateElementId}
+```
+
+保存请求：
+
+```json
+{
+  "dataSourceId": "9",
+  "sourcePath": "rows.AverageScore",
+  "targetProperty": "$",
+  "sourceKind": "DATA_SOURCE",
+  "transformConfigJson": null,
+  "formatConfigJson": null,
+  "fallbackValueJson": null,
+  "isRequired": false
+}
+```
+
+图表格式映射可放在 `formatConfigJson`：
+
+```json
+{
+  "chartMapping": {
+    "mode": "rows",
+    "categoryField": "Grade",
+    "seriesMappings": [
+      {
+        "seriesIndex": 0,
+        "seriesKey": "county",
+        "valueField": "CountyScore"
+      }
     ]
   }
 }
 ```
 
-集合每行第一列（或 `Category`、`Name`、`Label` 等命名列）作为分类，其余数值列按图表系列名优先匹配，随后按列顺序匹配。集合数值列不能少于模板现有系列数量。
-
-成功响应：
+### 建议、预览和校验
 
 ```http
-HTTP/1.1 200 OK
-Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document
-Content-Disposition: attachment; filename=template_generated.docx
+GET  /api/template-elements/{templateElementId}/suggestions?dataSourceId={dataSourceId}
+POST /api/binding-sets/{bindingSetId}/resolve-candidates?dataSourceId={dataSourceId}
+GET  /api/binding-sets/{bindingSetId}/preview/{templateElementId}
+POST /api/binding-sets/{bindingSetId}/validate
 ```
 
-请求值按字段路径覆盖演示值。合并后某个绑定字段仍缺值时返回错误，不会静默写入空字符串。
+建议响应包含 `fieldPath`、0–100 `score` 和 `reasons`。候选恢复只保存高置信度、无并列结果。
 
-错误：
-
-- `404 template_not_found`
-- `409 empty_bindings`
-- `400 missing_data_value`
-- `400 data_value_conversion_failed`
-- `404 locator_not_found`
-- `500 report_rendering_failed`
-
-## 9. 导出可复用模板
-
-```http
-POST /api/templates/{templateId}/export-reusable
-```
-
-请求体为空，也不接收任何真实数据值。后端从不可变原始 DOCX 字节创建副本：
-
-- 文本绑定写为 `{{binding.DataPath}}`；
-- 文本绑定范围原有的黄色高亮会被移除，其他字符格式保持不变；
-- 未绑定模拟值保持原样；
-- 图表本体、类型、样式、分类和系列缓存保持不变；
-- 图表绑定写入命名空间为 `urn:word-template-binding:bindings:v1`、版本为 `1` 的 CustomXmlPart；
-- 所有 Locator、上下文、重叠范围、字段路径和图表定位在返回文件前统一校验。
-
-成功响应：
-
-```http
-HTTP/1.1 200 OK
-Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document
-Content-Disposition: attachment; filename*=UTF-8''template-template.docx
-```
-
-文件名规则为 `{stem}-template.docx`。原文件已以 `-template` 结尾时不重复追加；路径、非法字符、控制字符和过长名称会被清理。
-
-错误：
-
-- `404 template_not_found`
-- `409 empty_reusable_template_bindings`
-- `409 reusable_template_rendering_failed`
-
-## 10. 数据库连接健康检查
-
-```http
-GET /api/system/database/health
-```
-
-该接口会真实连接 MySQL，并执行 `SELECT DATABASE(), VERSION()`。成功时返回：
+校验响应：
 
 ```json
 {
-  "status": "healthy",
-  "provider": "MySQL",
-  "database": "report_platform",
-  "serverVersion": "8.0.x",
-  "missingSettings": [],
-  "message": "数据库连接成功。"
+  "status": "VALID",
+  "summary": {
+    "elementCount": 4,
+    "boundCount": 3,
+    "requiredUnboundCount": 0,
+    "invalidBindingCount": 0,
+    "warningCount": 1
+  },
+  "items": []
 }
 ```
 
-IP、账号或密码尚未填写时返回 `503` 和 `not_configured`；参数完整但远程连接失败时返回 `503` 和 `unavailable`。响应与日志均不会输出数据库密码。
+### 生成输出
 
-## 状态码汇总
+```http
+POST /api/binding-sets/{bindingSetId}/reports
+POST /api/binding-sets/{bindingSetId}/export-reusable
+```
 
-| 状态码 | 使用场景 |
-| --- | --- |
-| `200` | 请求成功或返回 DOCX |
-| `400` | 无效模板、无模拟数据、值缺失或转换失败 |
-| `404` | 模板、Locator 或字段不存在 |
-| `409` | 绑定类型不兼容、模板没有绑定或复用模板导出前校验失败 |
-| `413` | 上传文件超过配置限制 |
-| `503` | 数据库尚未配置或远程数据库不可用 |
-| `500` | 报告生成或服务器内部错误 |
+报告生成会先执行全量校验，使用绑定项数据源的最新 READY 快照。响应均为独立 DOCX。
+
+## 6. 常见错误
+
+| HTTP | errorCode | 含义 |
+| --- | --- | --- |
+| 400 | `invalid_database_id` | ID 不是大于 0 的无符号整数 |
+| 400 | `invalid_template_file` | 空文件、非 DOCX 或包损坏 |
+| 400 | `data_connection_unavailable` | 凭据引用缺失或连接不可用 |
+| 404 | `template_not_found` | 模板不存在 |
+| 409 | `binding_validation_failed` | 类型、归属或目标属性不兼容 |
+| 409 | `empty_bindings` | 绑定集为空 |
+| 413 | `template_too_large` | 文件超过配置上限 |
+| 500 | `report_rendering_failed` | OpenXML 报告渲染失败 |
+
+## 7. 开发兼容 API
+
+`Persistence:Mode=InMemory` 时额外映射原 GUID 演示接口（`/api/templates/upload`、`/api/bindings`、`/api/reports/generate` 等）用于既有回归测试。生产 MySQL 模式不映射这些端点；新前端只调用本文件描述的正式 API。

@@ -14,7 +14,9 @@ export type DataValueType =
   | "Decimal"
   | "Boolean"
   | "Date"
-  | "Array";
+  | "Array"
+  | "Object"
+  | "Binary";
 
 export type BindingTargetKind = "Text" | "Chart";
 
@@ -30,6 +32,7 @@ export interface TextLocator {
 }
 
 export interface MockItem {
+  templateElementId?: string;
   locatorId: string;
   mockValue: string;
   dataType: MockDataType;
@@ -55,6 +58,7 @@ export interface ChartSeriesItem {
 }
 
 export interface ChartItem {
+  templateElementId?: string;
   locatorId: string;
   locator: ChartLocator;
   chartType: string;
@@ -355,4 +359,137 @@ export interface DataSchemaResponse {
   matchCount: number;
   isTruncated: boolean;
   nodes: DataFieldNode[];
+}
+
+export interface TemplateRecord {
+  id: string;
+  templateCode: string;
+  templateName: string;
+  templateType: string;
+  categoryCode: string | null;
+  templateStatus: string;
+  description: string | null;
+  currentVersionNo: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TemplateElementRecord {
+  id: string;
+  templateVersionId: string;
+  elementKey: string;
+  elementType: "TEXT" | "CHART" | string;
+  locatorType: string;
+  displayName: string | null;
+  locator: Record<string, unknown> & { locatorId?: string };
+  bindingSchema: unknown;
+  defaultValue: unknown;
+  isRequired: boolean;
+  sortNo: number;
+  parseStatus: string;
+  parseMessage: string | null;
+}
+
+export interface TemplateVersionView {
+  template: TemplateRecord;
+  version: {
+    id: string;
+    templateId: string;
+    versionNo: number;
+    fileObjectId: string;
+    versionStatus: string;
+    elementCount: number;
+    createdAt: string;
+  };
+  file: {
+    id: string;
+    originalName: string;
+    mimeType: string;
+    fileSize: number;
+    sha256: string | null;
+    objectStatus: string;
+  };
+  elements: TemplateElementRecord[];
+  parseResult: {
+    scanResult: {
+      contentHash: string;
+      mockItems: MockItem[];
+      charts: ChartItem[];
+      preview: { paragraphs: PreviewParagraph[] };
+      warnings?: Array<{ code: string; message: string }>;
+    };
+    importSummary: TemplateImportSummary;
+    warnings: Array<{ code: string; message: string }>;
+  };
+}
+
+export interface ProjectRecord {
+  id: string;
+  projectCode: string;
+  projectName: string;
+  description: string | null;
+  projectStatus: string;
+}
+
+export interface ChapterRecord {
+  id: string;
+  projectId: string;
+  parentId: string | null;
+  chapterCode: string;
+  title: string;
+  levelNo: number;
+  sortKey: number;
+  workflowStatus: string;
+  isEnabled: boolean;
+}
+
+export interface DataSourceRecord {
+  id: string;
+  projectId: string;
+  connectionId: string;
+  sourceCode: string;
+  sourceName: string;
+  sourceType: string;
+  sourceStatus: string;
+  schemaName: string;
+  objectType: string;
+  objectName: string;
+}
+
+export interface DataFieldRecord {
+  id: string;
+  snapshotId: string;
+  fieldPath: string;
+  fieldName: string;
+  comment: string | null;
+  dataType: DataValueType;
+  isArray: boolean;
+  isNullable: boolean;
+  isBindable: boolean;
+  sampleValue: unknown;
+  displayOrder: number;
+}
+
+export interface BindingSetRecord {
+  id: string;
+  chapterId: string;
+  versionNo: number;
+  templateVersionId: string;
+  bindingStatus: string;
+  validationStatus: string;
+  validationResult: unknown;
+}
+
+export interface BindingItemRecord {
+  id: string;
+  bindingSetId: string;
+  templateElementId: string;
+  targetProperty: string;
+  sourceKind: string;
+  dataSourceId: string | null;
+  sourcePath: string | null;
+  transformConfig: unknown;
+  formatConfig: unknown;
+  fallbackValue: unknown;
+  isRequired: boolean;
 }

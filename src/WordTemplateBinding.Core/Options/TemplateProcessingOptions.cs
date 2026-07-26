@@ -8,6 +8,36 @@ namespace WordTemplateBinding.Core.Options;
 public sealed class TemplateProcessingOptions
 {
     /// <summary>
+    /// 获取或设置是否识别显式双花括号占位符。
+    /// </summary>
+    public bool EnableExplicitPlaceholderRecognition { get; set; } = true;
+
+    /// <summary>
+    /// 获取或设置是否识别标准黄色高亮。
+    /// </summary>
+    public bool EnableYellowHighlightRecognition { get; set; } = true;
+
+    /// <summary>
+    /// 获取或设置是否识别黄色 Run 底纹。
+    /// </summary>
+    public bool EnableYellowShadingRecognition { get; set; } = true;
+
+    /// <summary>
+    /// 获取或设置是否自动识别所有小数。
+    /// </summary>
+    public bool EnableAutomaticDecimalRecognition { get; set; }
+
+    /// <summary>
+    /// 获取或设置是否自动识别所有整数。
+    /// </summary>
+    public bool EnableAutomaticIntegerRecognition { get; set; }
+
+    /// <summary>
+    /// 获取或设置识别为黄色的十六进制填充色集合。
+    /// </summary>
+    public string[] YellowFillColors { get; set; } = { "FFFF00", "FFF200" };
+
+    /// <summary>
     /// 获取或设置允许上传的最大文件大小，单位为 MB。
     /// </summary>
     [Range(1, 100)]

@@ -1,94 +1,165 @@
 # WordTemplateBinding
 
-WordTemplateBinding 是一个基于 .NET 7、ASP.NET Core Minimal API 和 Open XML SDK 的 Word 模板可视化数据绑定 MVP。
+WordTemplateBinding 是一个基于 .NET 7、ASP.NET Core Minimal API、Open XML SDK、
+Vue 3 和 MySQL 8 的 Word 模板数据绑定平台。
 
-当前版本提供两条互不混淆的输出链路，以及可复用模板的完整闭环：
+系统支持上传 DOCX、识别可绑定元素、预览 Word 原生图表、管理模板版本、连接业务
+MySQL 数据源、配置字段绑定，并生成报告或导出可复用模板。
 
-```text
-上传 DOCX → 扫描显式占位符、黄色高亮和数字模拟值 → 结构化预览高亮
-→ 拖拽数据字段 → 保存绑定
-├─ A. 读取真实/演示数据 → 生成最终报告 DOCX
-└─ B. 写入 {{完整数据路径}} 和图表 Manifest → 导出可复用模板 DOCX
-       → 以后重新上传 → 后端自动恢复绑定 → 继续编辑或直接生成报告
+## 1. 选择启动方式
+
+| 场景            | 持久化                   | 是否需要 MySQL | 是否需要 Node.js     | 入口                      |
+| --------------- | ------------------------ | -------------- | -------------------- | ------------------------- |
+| 本地快速体验    | InMemory                 | 否             | 否                   | `http://127.0.0.1:5080` |
+| 前端热更新开发  | InMemory 或 MySQL        | 可选           | 是                   | `http://127.0.0.1:5173` |
+| MySQL 联调/生产 | MySQL`report_platform` | 是             | 仅重新构建前端时需要 | 自定义                    |
+
+第一次运行建议先使用“本地快速体验”。该模式无需填写数据库账号，关闭进程后数据会
+清空。
+
+## 2. 环境要求
+
+必需：
+
+- .NET SDK 7.0。仓库的 `global.json` 会在已安装的 7.0 Feature Band 中向前滚动。
+- Windows PowerShell 7 或常规 PowerShell。
+
+按需安装：
+
+- Node.js 20+：仅修改、测试或重新构建 Vue 前端时需要。
+- MySQL 8.0+：仅使用真实持久化与业务数据源时需要。
+- Microsoft Word 或 WPS Office：人工检查最终 DOCX 时建议安装。
+
+检查版本：
+
+```powershell
+dotnet --version
+node --version
+npm --version
 ```
 
-## 环境要求
+如果只运行仓库已构建好的页面，`node` 和 `npm` 可以不安装。
 
-- .NET SDK 7
-- 支持 ES Modules、Fetch API 和 HTML Drag and Drop API 的现代浏览器
-- Microsoft Word 或 WPS Office，用于人工检查最终 DOCX
-- MySQL 8.0+（连接 Report Platform 数据库时需要）
+## 3. 本地快速启动（推荐）
 
-IP、账号和密码未配置时应用仍可启动并使用现有内存 MVP 功能；远程数据库连接功能需要 MySQL 8.0+。
-
-## 项目结构
-
-```text
-WordTemplateBinding.sln
-├── src/
-│   ├── WordTemplateBinding.Core
-│   │   ├── Enums、Models、Options、Exceptions
-│   │   ├── Interfaces
-│   │   └── Services
-│   ├── WordTemplateBinding.Infrastructure
-│   │   ├── OpenXml
-│   │   ├── Stores
-│   │   ├── DataSchema
-│   │   └── DependencyInjection
-│   └── WordTemplateBinding.Api
-│       ├── Contracts、Endpoints、Middleware
-│       └── wwwroot
-├── tests/
-│   ├── WordTemplateBinding.UnitTests
-│   └── WordTemplateBinding.IntegrationTests
-└── docs/
-    ├── phase1-design.md
-    └── api.md
-```
-
-### 项目职责
-
-- `Core`：领域模型、存储和处理接口、业务异常以及模板/绑定/报告/复用模板业务编排。
-- `Infrastructure`：OpenXML 扫描、共享文本范围替换、图表 Manifest、内存存储、演示 Schema 和数据值。
-- `Api`：Minimal API、ProblemDetails、上传下载安全处理和原生 HTML/CSS/JavaScript 页面。
-- `UnitTests`：程序化 DOCX 扫描、替换、格式保留、存储、Schema、绑定和值格式化测试。
-- `IntegrationTests`：通过 `WebApplicationFactory` 验证 HTTP 功能闭环和生成 DOCX。
-
-## 构建与启动
-
-### 直接运行完整项目（推荐）
-
-仓库已经包含构建好的 Vue 生产资源，ASP.NET Core 会直接从 `src/WordTemplateBinding.Api/wwwroot` 托管前端页面。因此，仅运行项目时不需要启动独立的 Node.js/Vite 服务。
-
-在 PowerShell 中执行：
+### 3.1 进入仓库
 
 ```powershell
 cd D:\Code\WordTemplateBinding
-
-dotnet restore
-dotnet build
-dotnet test
-dotnet run --project .\src\WordTemplateBinding.Api --urls http://127.0.0.1:5080
 ```
 
-应用启动后访问：
+### 3.2 还原、构建和测试
+
+```powershell
+dotnet restore WordTemplateBinding.sln
+dotnet build WordTemplateBinding.sln
+dotnet test WordTemplateBinding.sln
+```
+
+当前基线应通过：
+
+- 110 个单元测试；
+- 12 个集成测试。
+
+只想立即体验页面时，可以在成功还原后直接启动；但首次运行建议至少执行一次构建。
+
+### 3.3 启动 API 和内置页面
+
+```powershell
+dotnet run --project .\src\WordTemplateBinding.Api
+```
+
+`Properties/launchSettings.json` 会自动设置：
+
+- 地址：`http://127.0.0.1:5080`
+- 环境：`Development`
+- 持久化：`InMemory`
+
+看到类似以下输出即表示启动成功：
+
+```text
+Now listening on: http://127.0.0.1:5080
+Application started. Press Ctrl+C to shut down.
+```
+
+然后访问：
 
 ```text
 http://127.0.0.1:5080
 ```
 
-### 前后端分开开发（Vue 热更新）
+页面和 API 由同一个 ASP.NET Core 进程提供，无需再启动 Vue。按 `Ctrl+C` 停止服务。
 
-需要修改 Vue/ECharts 前端时，分别启动后端 API 和 Vite 开发服务器。
+可以在另一个 PowerShell 窗口检查 API：
 
-终端 1：启动 ASP.NET Core 后端：
+```powershell
+Invoke-RestMethod "http://127.0.0.1:5080/api/templates?page=1&pageSize=5"
+```
+
+本地 InMemory 模式的特点：
+
+- 不需要 MySQL；
+- 可以上传、扫描和预览 DOCX；
+- 同时保留旧版演示 API，便于兼容既有测试；
+- 数据只存在当前进程内，重启后清空；
+- 数据库健康接口返回 `not_configured`/503 是正常现象。
+
+## 4. 端口 5080 已被占用
+
+如果看到：
+
+```text
+Failed to bind to address http://127.0.0.1:5080: address already in use
+SocketException (10048)
+```
+
+说明已有程序正在监听 5080。先检查它是否就是已经启动的本项目：
+
+```powershell
+Get-NetTCPConnection -LocalPort 5080 -State Listen |
+  Select-Object LocalAddress, LocalPort, OwningProcess
+```
+
+将输出的 `OwningProcess` 数字代入：
+
+```powershell
+$processIdToInspect = 12345
+Get-Process -Id $processIdToInspect
+```
+
+如果浏览器打开 `http://127.0.0.1:5080` 已能正常使用，就不需要重复执行
+`dotnet run`。
+
+只有确认该 PID 是自己要关闭的旧开发进程时才执行：
+
+```powershell
+$processIdToStop = 12345
+Stop-Process -Id $processIdToStop
+```
+
+也可以保留原进程，换一个端口：
+
+```powershell
+dotnet run --project .\src\WordTemplateBinding.Api `
+  --urls http://127.0.0.1:5081
+```
+
+此时访问 `http://127.0.0.1:5081`。
+
+## 5. 前端热更新开发
+
+仓库已经提交了生产静态资源。只有修改 `frontend/src` 时才需要启动 Vite。
+
+打开两个 PowerShell 窗口。
+
+窗口 A，启动后端：
 
 ```powershell
 cd D:\Code\WordTemplateBinding
-dotnet run --project .\src\WordTemplateBinding.Api --urls http://127.0.0.1:5080
+dotnet run --project .\src\WordTemplateBinding.Api
 ```
 
-终端 2：安装前端依赖并启动 Vite：
+窗口 B，启动前端：
 
 ```powershell
 cd D:\Code\WordTemplateBinding\frontend
@@ -96,184 +167,298 @@ npm ci
 npm run dev
 ```
 
-然后访问 Vite 输出的地址，默认通常为：
+访问 Vite 输出的地址，通常是：
 
 ```text
-http://localhost:5173
+http://127.0.0.1:5173
 ```
 
-Vite 会把 `/api` 请求代理到 `http://127.0.0.1:5080`。如果后端地址不同，可通过环境变量 `WTB_API_ORIGIN` 指定代理目标。
-
-### 构建前端生产资源
-
-修改前端后执行：
+Vite 会把 `/api` 代理到 `http://127.0.0.1:5080`。如果后端改用了 5081：
 
 ```powershell
-cd D:\Code\WordTemplateBinding\frontend
+$env:WTB_API_ORIGIN = "http://127.0.0.1:5081"
+npm run dev
+```
+
+前端检查命令：
+
+```powershell
 npm run typecheck
 npm test
 npm run build
 ```
 
-`npm run build` 会直接更新 `src/WordTemplateBinding.Api/wwwroot`。构建完成后返回项目根目录启动后端即可：
+`npm run build` 会把生产资源写入：
+
+```text
+src/WordTemplateBinding.Api/wwwroot
+```
+
+构建完成后，对 ASP.NET Core 页面执行一次 `Ctrl+F5`，避免浏览器标签页继续运行旧
+JavaScript。
+
+## 6. 使用真实 MySQL
+
+### 6.1 初始化 `report_platform`
+
+应用不会自动建表或修改表结构。请先备份数据库，再由数据库管理员按场景执行仓库 SQL：
+
+1. 新数据库先执行 `sql/report_platform_v2_schema.sql`；
+2. 再执行一次
+   `sql/report_platform_v2_to_v2_1_database_file_storage_migration.sql`；
+3. 已经是 V2 的数据库只执行第二个迁移脚本；
+4. 已经完成 V2.1 数据库文件存储迁移的数据库不要重复执行。
+
+数据结构说明：
+
+- `sql/report_platform_v2_1_database_design_and_dictionary.md`
+- `sql/report_platform_v2_1_data_dictionary.md`
+
+应用账号需要对平台所使用的 `rp_*` 表具备最小必要的读写权限。
+
+### 6.2 本机 MySQL 联调
+
+项目已配置 `UserSecretsId`。在 Development 环境中，可用 User Secrets 保存平台库
+凭据，避免把密码写入仓库：
 
 ```powershell
+dotnet user-secrets set "Database:Host" "127.0.0.1" `
+  --project .\src\WordTemplateBinding.Api
+dotnet user-secrets set "Database:Port" "3306" `
+  --project .\src\WordTemplateBinding.Api
+dotnet user-secrets set "Database:Database" "report_platform" `
+  --project .\src\WordTemplateBinding.Api
+dotnet user-secrets set "Database:Username" "report_app" `
+  --project .\src\WordTemplateBinding.Api
+dotnet user-secrets set "Database:Password" "请替换为真实密码" `
+  --project .\src\WordTemplateBinding.Api
+dotnet user-secrets set "Database:SslMode" "None" `
+  --project .\src\WordTemplateBinding.Api
+dotnet user-secrets set "ApplicationIdentity:DefaultActorUserId" "1" `
+  --project .\src\WordTemplateBinding.Api
+```
+
+`SslMode=None` 仅适合不支持 TLS 的本机 MySQL。远程和生产环境应使用 `Required` 或更
+严格的证书校验配置。
+
+在当前 PowerShell 会话中切换为 MySQL 并启动：
+
+```powershell
+$env:Persistence__Mode = "MySql"
+dotnet run --project .\src\WordTemplateBinding.Api
+```
+
+停止后清除本次会话覆盖：
+
+```powershell
+Remove-Item Env:Persistence__Mode -ErrorAction SilentlyContinue
+```
+
+检查平台库：
+
+```powershell
+Invoke-RestMethod "http://127.0.0.1:5080/api/system/database/health"
+```
+
+成功时 `status` 为 `healthy`。如果是 `not_configured` 或 `unavailable`，检查 Host、
+端口、账号、密码、TLS、防火墙以及数据库授权。
+
+查看或清理本地 User Secrets：
+
+```powershell
+dotnet user-secrets list --project .\src\WordTemplateBinding.Api
+dotnet user-secrets clear --project .\src\WordTemplateBinding.Api
+```
+
+### 6.3 生产启动
+
+发布或生产启动时不要使用 Development 启动配置，也不要依赖 User Secrets。使用部署
+平台的密钥管理器注入环境变量：
+
+```powershell
+$env:ASPNETCORE_ENVIRONMENT = "Production"
+$env:Persistence__Mode = "MySql"
+$env:Database__Host = "db.example.internal"
+$env:Database__Port = "3306"
+$env:Database__Database = "report_platform"
+$env:Database__Username = "report_app"
+$env:Database__Password = "<由密钥系统注入>"
+$env:Database__SslMode = "Required"
+$env:ApplicationIdentity__DefaultActorUserId = "1"
+
+dotnet run --no-launch-profile `
+  --project .\src\WordTemplateBinding.Api `
+  --urls http://0.0.0.0:5080
+```
+
+生产配置默认值位于 `src/WordTemplateBinding.Api/appsettings.json`。其中
+`Persistence:Mode` 默认为 `MySql`，但 Host、Username 和 Password 故意留空。
+
+### 6.4 业务 MySQL 数据源
+
+平台库账号与“报告要读取的业务数据库账号”是两套独立凭据。
+
+数据连接记录只保存引用：
+
+```text
+credential_ref = config:DataSourceCredentials:schoolDb
+```
+
+对应账号密码由服务端配置或密钥系统注入：
+
+```powershell
+$env:DataSourceCredentials__schoolDb__Username = "reader"
+$env:DataSourceCredentials__schoolDb__Password = "<由密钥系统注入>"
+```
+
+业务账号建议只授予目标 Schema 的 `SELECT` 以及必要的 `information_schema` 元数据
+读取权限。系统不接受用户提交任意 SQL。
+
+## 7. 发布
+
+先构建前端，再发布后端：
+
+```powershell
+cd D:\Code\WordTemplateBinding\frontend
+npm ci
+npm run build
+
 cd D:\Code\WordTemplateBinding
-dotnet run --project .\src\WordTemplateBinding.Api --urls http://127.0.0.1:5080
+dotnet publish .\src\WordTemplateBinding.Api `
+  --configuration Release `
+  --output .\publish `
+  -p:SkipFrontendBuild=true
 ```
 
-## 使用流程
-
-1. 打开浏览器访问应用首页。
-2. 点击“上传 DOCX”，选择包含模拟数据的普通 `.docx` 文件。可在 Word 中用黄色文本高亮人工标记任意绑定范围；普通小数和整数仍会自动识别，文字也可继续使用 `{{示例文字}}` 或 `{{text:示例文字}}` 显式标记。
-3. 在中间结构化预览中查看可绑定范围，例如黄色标记的文字、`88.5`、`1200`、`{{年度报告}}` 或 `{{text:年度报告}}`。
-4. 在右侧数据源中展开字段树或搜索 `AverageScore`。
-5. 将 `StudentStatistics.AverageScore` 拖到高亮的 `88.5` 上。
-6. 检查高亮变为绿色、右侧已绑定列表和属性信息同步更新。
-7. 选择一种输出：
-   - 点击“生成报告”，下载已经写入真实/演示值的最终 `.docx`；
-   - 点击“导出复用模板”，下载 `{原文件名}-template.docx`，文本绑定会写成 `{{StudentStatistics.AverageScore}}`，图表绑定会保存在 DOCX 内嵌 Manifest 中。
-8. 可将复用模板转移或保存，以后重新上传；后端会按当前 Schema 自动恢复有效绑定，前端直接显示绿色状态。
-9. 对自动恢复结果继续取消、修改或增加绑定，也可直接点击“生成报告”。
-10. 使用 Microsoft Word 或 WPS Office 打开并检查替换值、原模板格式和可编辑图表。
-
-如果生成请求没有显式提供字段值，系统使用内存演示值；`StudentStatistics.AverageScore` 的默认演示值为 `92.3`。
-
-## 配置
-
-`src/WordTemplateBinding.Api/appsettings.json`：
-
-```json
-{
-  "Database": {
-    "Host": "",
-    "Port": 3306,
-    "Database": "report_platform",
-    "Username": "",
-    "Password": "",
-    "SslMode": "Preferred",
-    "ConnectionTimeoutSeconds": 15,
-    "DefaultCommandTimeoutSeconds": 30,
-    "MaximumPoolSize": 50
-  },
-  "TemplateProcessing": {
-    "MaxUploadSizeMb": 20,
-    "MockNumberPattern": "(?<![A-Za-z0-9_.,-])-?(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)\\.[0-9]+(?![A-Za-z0-9_.,])",
-    "MockIntegerPattern": "(?<![A-Za-z0-9_.,-])-?(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?![A-Za-z0-9_.,])",
-    "MockTextPattern": "\\{\\{(?:text:(?<value>[^{}\\r\\n]+)|(?<value>[^{}:\\r\\n]+))\\}\\}",
-    "ContextLength": 20,
-    "RegexTimeoutMilliseconds": 250
-  }
-}
-```
-
-- `Database.Host`：远程 MySQL 的 IP 或主机名。
-- `Database.Port`：MySQL 端口，默认为 `3306`。
-- `Database.Database`：目标数据库，当前固定为 `report_platform`。
-- `Database.Username` / `Database.Password`：数据库账号和密码。
-- `Database.SslMode`：TLS 模式；远程数据库支持 TLS 时建议改为 `Required` 或更严格模式。
-- `Database.MaximumPoolSize`：应用连接池最大连接数。
-- `MaxUploadSizeMb`：单个模板最大上传大小。
-- `MockNumberPattern`：小数识别正则，允许数值紧贴中文。
-- `MockIntegerPattern`：整数识别正则，不会截取小数的一部分。
-- `MockTextPattern`：显式文字标记识别正则，必须包含名为 `value` 的捕获组。
-- `ContextLength`：计算定位上下文哈希时匹配值两侧的字符数。
-- `RegexTimeoutMilliseconds`：单次正则匹配超时。
-
-不要把真实密码提交到 `appsettings.json`。本地开发可使用 .NET User Secrets：
+发布目录已经包含 `wwwroot`。配置好生产环境变量后运行：
 
 ```powershell
-dotnet user-secrets set "Database:Host" "远程数据库IP" --project .\src\WordTemplateBinding.Api
-dotnet user-secrets set "Database:Username" "数据库账号" --project .\src\WordTemplateBinding.Api
-dotnet user-secrets set "Database:Password" "数据库密码" --project .\src\WordTemplateBinding.Api
+.\publish\WordTemplateBinding.Api.exe --urls http://0.0.0.0:5080
 ```
 
-部署环境可使用 `Database__Host`、`Database__Username`、`Database__Password` 环境变量覆盖空占位。配置后访问 `GET /api/system/database/health`，接口会真实连接 MySQL 并确认当前数据库为 `report_platform`。
+如果不传 `-p:SkipFrontendBuild=true` 且 `frontend/node_modules` 存在，项目的 Publish
+目标也会自动执行一次 `npm run build`。
 
-## 核心实现说明
+## 8. 页面使用流程
 
-### 跨 Run 扫描
+1. 选择项目和章节，确定绑定配置归属。
+2. 选择已有模板，或者保持“上传时新建模板”并上传 DOCX。
+3. 选择已有模板后再次上传，会创建新的不可变版本。
+4. 选择数据源并刷新快照，字段树来自最新 READY 快照。
+5. 将字段拖到文档高亮、占位符或图表区域。
+6. 查看单项预览并执行绑定校验。
+7. 生成报告，或从当前绑定集导出复用模板。
 
-扫描器不会对每个 `Text.Text` 单独运行正则。它按段落拼接全部 `Text` 节点，并为每个节点记录全局起始偏移和长度。这样即使 Word 将 `88.5`、连续黄色高亮、`{{年度报告}}` 或 `{{text:年度报告}}` 拆到多个 Run，仍可作为一个连续值识别。
+前端网络请求使用数据库 `templateElementId`；DOCX 预览 DOM 定位使用当前版本的
+`locatorId`，两者不要混用。
 
-候选冲突按明确优先级处理：双花括号显式标记 > Word 黄色文本高亮 > 小数/整数正则。高优先级范围确定后，任何与其相交的低优先级候选都会丢弃，最终输出再按段落偏移排序。因此黄色高亮覆盖数字的一部分或全部时，不会同时出现重叠的数字候选。黄色内容完整匹配数值正则时保留 `Decimal`/`Integer` 类型，其余内容按 `String` 处理。
+## 9. 模板标记
 
-### LocatorId
+默认识别：
 
-LocatorId 包含模板内容哈希、文档部件、段落索引、段落偏移、长度、匹配序号、原始值和上下文哈希。字段按长度前缀编码后计算 SHA-256，并输出 Base64Url。
+- `{{path}}` 和 `{{text:path}}` 显式占位符；
+- `w:highlight w:val="yellow"` 黄色高亮；
+- Run 级 `w:shd w:fill="FFFF00"` 等配置黄色底纹；
+- 内容控件 `rtb-marker:*` Tag；
+- Word 原生图表。
 
-同一文档中的多个 `88.5` 因段落或偏移不同而拥有不同 LocatorId。
+扫描范围包括正文、表格、页眉、页脚、脚注、尾注和文本框。没有任何标记的合法 DOCX
+也能上传，状态为 `READY_WITH_WARNINGS`。
 
-Word 原生图表使用模板哈希、`/word/charts/chartN.xml` 部件 URI、关系 ID 和文档顺序生成独立 LocatorId。图表绑定到 `Array` 集合字段：每行第一列作为分类，其余数值列优先按系列名称匹配，未匹配时按列顺序写入系列。
+生产默认关闭全局整数和小数正则识别，避免把年份、页码和普通正文数字误判为绑定目标。
+Development 兼容模式会开启这两项。
 
-### 局部替换
+## 10. 常见问题
 
-最终报告和复用模板导出都从原始模板字节创建新的内存副本，并共用同一套 `OpenXmlTextReplacementService` 局部替换策略：
+### 上传返回 405 Method Not Allowed
 
-- 同一段落的替换从后向前执行；
-- 新值写入首个相关 Text 节点，继承首个 Run 的格式；
-- 导出复用模板时，绑定范围原有的黄色文本高亮会被移除，其他 Run 格式继续保留；
-- 后续节点仅删除被覆盖字符；
-- 保留目标范围前后的原始文本；
-- 不删除 Run，不重建 `document.xml`；
-- 首尾空格需要时设置 `xml:space="preserve"`。
+如果浏览器网络面板仍请求：
 
-### 原始模板不可变
+```text
+POST /api/templates/upload
+```
 
-模板模型和内存存储均对原始字节执行防御性复制。每次报告生成或复用模板导出都使用新的 `MemoryStream`，连续操作不会相互影响。
+说明当前标签页还在运行旧版前端。正式持久化上传接口是：
 
-### 可复用模板与自动恢复
+```text
+POST /api/templates
+```
 
-文本绑定的标准占位符协议是 `{{完整数据路径}}`，路径必须与 `DataFieldNode.path` 使用 `StringComparison.Ordinal` 完全一致。例如 `{{StudentStatistics.AverageScore}}`。旧的 `{{text:完整数据路径}}` 在导入时兼容，但新导出统一使用无前缀形式。
+处理方法：
 
-上传或重新扫描完成后，后端而非 Vue 前端负责恢复绑定：
+1. 确认后端是当前代码启动的；
+2. 执行 `npm run build`，或使用仓库已提交的最新 `wwwroot`；
+3. 在浏览器按 `Ctrl+F5`；
+4. 必要时关闭旧标签页后重新打开。
 
-- 显式占位符精确查询当前 Schema；可绑定的非集合字段恢复为文本绑定；
-- 普通 `{{年度报告}}` 若不是字段路径，仍作为未绑定模拟文字；
-- 未知路径、大小写不一致和类型变化不会拒绝模板，而是进入 `importSummary`；
-- 同一路径出现多次时，每个新 Locator 都建立独立绑定；
-- 图表本体保持不变，绑定写入命名空间为 `urn:word-template-binding:bindings:v1`、版本为 `1` 的 `CustomXmlPart`；重新上传时按 ChartPart、关系 ID 和文档顺序分级匹配。
+### `/api/templates` 返回 500
 
-Manifest 不保存真实数据、模板正文、数据库连接或认证信息，也不会覆盖其他软件的 CustomXmlPart。损坏或无法匹配的 Manifest 只产生警告，文本占位符恢复仍会继续。
+通常是误以 Production/MySQL 模式启动，但数据库参数没有配置。快速体验请直接执行：
 
-复用模板命名为 `{stem}-template.docx`；如果 stem 已以 `-template` 结尾（忽略大小写），不会再次追加。最终报告继续使用原有 `{stem}_generated.docx` 规则。
+```powershell
+dotnet run --project .\src\WordTemplateBinding.Api
+```
 
-## API 文档
+不要添加 `--no-launch-profile`，这样会使用 Development/InMemory 配置。
 
-完整接口、请求、响应和错误状态码见 [docs/api.md](docs/api.md)。
+### 数据库健康接口返回 503
 
-## 前端图表深度解析
+- InMemory 模式下属于预期结果，不影响本地模板体验；
+- MySQL 模式下请根据响应中的 `status`、`missingSettings` 和 `message` 检查配置。
 
-前端在浏览器内对每个 Word 原生图表做完整的 OOXML 结构解析（分类、系列、坐标轴、
-公式来源、嵌入 Excel、组合图与次坐标轴、绑定槽位、诊断信息），产出可序列化的
-`ParsedWordChart` 模型并在"图表结构"工作区页签中展示，同时驱动 ECharts 预览。
-设计细节见 [docs/chart-analysis-design.md](docs/chart-analysis-design.md)。
-当前正式绑定流程仍然只支持整张图表绑定一个 `Array` 集合字段，细粒度绑定槽位
-已生成但尚未开放。
+### MySQL 报表或字段目录为空
 
-## 当前限制
+检查：
 
-- 自动识别十进制小数和整数；普通文字可使用 Word 黄色文本高亮、`{{...}}` 或 `{{text:...}}` 标记。
-- 黄色识别仅针对标准 Word 文本高亮 `w:highlight w:val="yellow"`；其他高亮颜色、底纹以及显式 `w:highlight="none"` 不作为人工绑定标记。
-- 扫描主文档正文、表格单元格和 FooterPart 页脚中的普通段落；页脚 Locator 会记录具体 `/word/footerN.xml` 部件。
-- 暂不扫描页眉、脚注、尾注和文本框。
-- 浏览器预览是段落级结构化预览，不是 Word 像素级预览。
-- 已接入 `report_platform` 的 MySQL 连接池和连接健康检查；现有模板、绑定与演示数据业务存储仍为内存实现，服务重启后数据丢失。
-- 使用演示字段树和演示数据值。
-- 集合字段当前仅用于整张图表的数据绑定，不用于循环表格。
-- 支持更新 Word 原生图表的分类、系列名称和数值缓存；当前不增加或删除系列，也不回写图表内嵌 Excel 工作簿。
-- 不支持循环表格、条件、图片替换、HTML 富文本、除 `{{...}}`/`{{text:...}}` 外的模板语法或 PDF 转换。
-- 自动恢复只接受当前内存 Schema 中完全一致且类型兼容的路径；未知字段和 Schema 类型变化需要用户手动修复。
-- 图表 Manifest 当前只覆盖主文档中已扫描的 Word 原生图表；不能唯一匹配时保持未绑定。
-- 不包含用户登录、权限、数据库、模板版本或多人协作。
+- 数据连接类型是否为 `MYSQL`；
+- `credential_ref` 是否对应服务端 `DataSourceCredentials` 配置；
+- 业务账号能否读取目标 Schema、表/视图和 `information_schema`；
+- 数据源是否已经执行刷新并产生 READY 快照；
+- BLOB、Binary、JSON 等不可绑定字段会被排除。
 
-## 安全约束
+### 前端改动没有生效
 
-- 只允许 `.docx`，不信任客户端 Content-Type。
-- 使用 Open XML SDK 实际打开并校验普通 Word Document 类型。
-- 拒绝空文件、损坏包、宏启用文档和超限文件。
-- 服务器不使用用户文件名作为存储路径。
-- 下载文件名会移除路径和非法字符。
-- 前端不把模板文本写入 `innerHTML`，而是创建文本节点和元素。
-- 日志不记录完整 DOCX、模板正文或数据值。
-- 数据库密码不写入连接诊断响应；建议通过 User Secrets、环境变量或部署密钥管理系统注入。
+执行：
+
+```powershell
+cd .\frontend
+npm run build
+```
+
+然后重新启动后端，并在浏览器按 `Ctrl+F5`。
+
+## 11. 数据与安全约束
+
+- 平台数据库只使用既有 `rp_*` 表，运行时不执行建表或改表。
+- DOCX 内容保存在 `rp_file_object`、`rp_file_chunk` 和
+  `rp_file_upload_session`，默认分片 4 MiB。
+- `BIGINT UNSIGNED` 在后端使用 `ulong`，HTTP JSON 中数据库 ID 均为十进制字符串。
+- 文件上传、下载和完整性校验按流处理，并验证分片及完整 SHA-256。
+- 文件名不作为服务器路径，临时物化使用随机文件并在租约释放时删除。
+- SQL 值全部参数化；动态标识符必须来自 `information_schema` 已验证对象。
+- 数据样例最多 20 行，排除 BLOB/Binary，并限制单值与快照 JSON 大小。
+- 密码、连接串、DOCX 正文和快照内容不会写入 API ProblemDetails。
+
+## 12. 核心链路
+
+```text
+DOCX 上传
+→ rp_file_object / rp_file_chunk / rp_file_upload_session
+→ rp_template / rp_template_version
+→ OpenXML 扫描正文、页眉、页脚、脚注、尾注、文本框和图表
+→ rp_template_element
+→ 项目 / 章节 / MySQL 业务数据源 / 快照 / 字段目录
+→ rp_binding_set / rp_binding_item
+→ 建议、校验、预览
+→ 生成报告或导出复用模板
+```
+
+模板元素稳定身份优先使用内容控件 `rtb-marker:*` Tag，其次使用显式占位符上下文，
+最后回退到结构化 Locator。重新扫描时稳定 `element_key` 会保留数据库元素 ID。
+
+## 13. 进一步文档
+
+- [第一、第二阶段架构设计](docs/phase1-design.md)
+- [HTTP API](docs/api.md)
+- [数据库设计与数据字典](sql/report_platform_v2_1_database_design_and_dictionary.md)
+- [前端图表解析设计](docs/chart-analysis-design.md)

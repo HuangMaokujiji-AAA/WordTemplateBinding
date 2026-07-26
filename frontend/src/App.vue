@@ -8,21 +8,37 @@ import {
   watch,
 } from "vue";
 import {
-  deleteBinding,
-  downloadReport,
-  downloadReusableTemplate,
-  getSchema,
-  getTemplate,
-  rescanTemplate,
-  uploadTemplate,
-  upsertBinding,
+  deletePersistentBinding,
+  downloadBindingSetReport,
+  downloadBindingSetReusableTemplate,
+  getCurrentTemplateVersion,
+  getBindingPreview,
+  getOrCreateBindingSet,
+  getPersistentSchema,
+  getTemplateVersionFile,
+  hydrateTemplateResponse,
+  listBindingItems,
+  listChapters,
+  listDataSources,
+  listPersistentTemplates,
+  listProjects,
+  refreshDataSource,
+  rescanTemplateVersion,
+  uploadPersistentTemplate,
+  upsertPersistentBinding,
+  validateBindingSet,
 } from "./api/client";
 import type {
+  ChapterRecord,
   ChartItem,
+  DataSourceRecord,
   DataFieldNode,
   DataSchemaResponse,
   MockItem,
+  ProjectRecord,
+  TemplateRecord,
   TemplateResponse,
+  TemplateVersionView,
 } from "./api/types";
 import DocxUploadPanel from "./components/DocxUploadPanel.vue";
 import DocxViewer from "./components/DocxViewer.vue";
@@ -55,7 +71,18 @@ type WorkspaceTab = "schema" | "bindings" | "properties" | "chart-structure";
 const SAMPLE_PATH = "/samples/第一部分 科学监测结果.docx";
 
 const template = ref<TemplateResponse | null>(null);
+const versionView = ref<TemplateVersionView | null>(null);
 const schema = ref<DataSchemaResponse | null>(null);
+const projects = ref<ProjectRecord[]>([]);
+const chapters = ref<ChapterRecord[]>([]);
+const dataSources = ref<DataSourceRecord[]>([]);
+const templateCatalog = ref<TemplateRecord[]>([]);
+const selectedProjectId = ref("");
+const selectedChapterId = ref("");
+const selectedDataSourceId = ref("");
+const selectedTemplateId = ref("");
+const bindingSetId = ref("");
+const bindingPreview = ref("");
 const schemaQuery = ref("");
 const activeTab = ref<WorkspaceTab>("schema");
 const selectedLocatorId = ref<string | null>(null);
@@ -128,12 +155,20 @@ let renderTaskId = 0;
 let searchTimer: ReturnType<typeof setTimeout> | undefined;
 
 onMounted(() => {
-  void loadSchema("");
+  void loadWorkspaceContext();
 });
 
 watch(schemaQuery, (query) => {
   if (searchTimer) clearTimeout(searchTimer);
   searchTimer = setTimeout(() => void loadSchema(query), 280);
+});
+
+watch(selectedProjectId, () => {
+  void loadProjectContext();
+});
+
+watch(selectedDataSourceId, () => {
+  void loadSchema(schemaQuery.value);
 });
 
 onUnmounted(() => {
@@ -187,7 +222,10 @@ async function handleFileSelected(file: File): Promise<void> {
     return;
   }
 
-  const uploadPromise = uploadTemplate(file);
+  const uploadPromise = uploadPersistentTemplate(
+    file,
+    selectedTemplateId.value || null
+  );
   const previewPromise = processDocx(file, {
     ...containers,
     onProgress: handleProgress,
@@ -218,7 +256,16 @@ async function handleFileSelected(file: File): Promise<void> {
       throw uploadResult.reason;
     }
 
-    template.value = uploadResult.value;
+    versionView.value = uploadResult.value;
+    selectedTemplateId.value = uploadResult.value.template.id;
+    await refreshBindingContext();
+    template.value = hydrateTemplateResponse(
+      uploadResult.value,
+      bindingSetId.value
+        ? await listBindingItems(bindingSetId.value)
+        : []
+    );
+    await refreshTemplateCatalog();
     const decoration = decorateRenderedDocument(
       containers.documentContainer,
       template.value.mockItems,
@@ -285,29 +332,34 @@ async function handleLoadSample(): Promise<void> {
 }
 
 async function handleRescan(): Promise<void> {
-  if (!template.value) return;
+  if (!versionView.value) return;
 
   await runAction("正在从后端保存的原始 DOCX 重新扫描…", async () => {
-    template.value = await rescanTemplate(template.value!.templateId);
+    versionView.value = await rescanTemplateVersion(versionView.value!.version.id);
+    await refreshTemplateBindings();
     syncSelection();
     refreshRenderedBindings();
+    const importSummary = template.value?.importSummary;
     setStatus(
-      `重新扫描完成，原始模板未被修改${formatImportSummary(template.value.importSummary)}。`
+      `重新扫描完成，原始模板未被修改${importSummary ? formatImportSummary(importSummary) : ""}。`
     );
   });
 }
 
 async function handleGenerate(): Promise<void> {
-  if (!template.value) return;
+  if (!bindingSetId.value) {
+    setStatus("请先选择项目、章节并建立绑定配置。", true);
+    return;
+  }
 
   await runAction("正在由后端生成 DOCX 报告…", async () => {
-    const generatedName = await downloadReport(template.value!.templateId);
+    const generatedName = await downloadBindingSetReport(bindingSetId.value);
     setStatus(`报告已生成：${generatedName}`);
   });
 }
 
 async function handleTestReport(payload: Record<string, unknown>[]): Promise<void> {
-  if (!template.value) return;
+  if (!bindingSetId.value) return;
   const chartItem = selectedChartWorkspaceItem.value;
   if (!chartItem?.isBound || !chartItem.boundDataPath) {
     setStatus("请先将一个 Array 集合字段绑定到当前图表。", true);
@@ -319,10 +371,8 @@ async function handleTestReport(payload: Record<string, unknown>[]): Promise<voi
   };
 
   await runAction("正在使用测试数据生成 DOCX 报告…", async () => {
-    const generatedName = await downloadReport(
-      template.value!.templateId,
-      values
-    );
+    void values;
+    const generatedName = await downloadBindingSetReport(bindingSetId.value);
     setStatus(`测试报告已生成：${generatedName}`);
   });
 }
@@ -341,27 +391,30 @@ async function handleSaveMapping(mappingPayload: {
     }>;
   };
 }): Promise<void> {
-  if (!template.value) return;
+  if (!template.value || !bindingSetId.value || !selectedDataSourceId.value) return;
 
   await runAction("正在保存图表字段映射…", async () => {
-    await upsertBinding(
-      template.value!.templateId,
-      mappingPayload.locatorId,
-      mappingPayload.dataPath,
-      mappingPayload.mapping
+    const chart = template.value!.charts.find(
+      (item) => item.locatorId === mappingPayload.locatorId
     );
-    template.value = await getTemplate(template.value!.templateId);
+    if (!chart?.templateElementId) throw new Error("图表缺少持久化模板元素 ID。");
+    await upsertPersistentBinding(
+      bindingSetId.value,
+      chart.templateElementId,
+      selectedDataSourceId.value,
+      mappingPayload.dataPath,
+      JSON.stringify({ chartMapping: mappingPayload.mapping })
+    );
+    await refreshTemplateBindings();
     setStatus("图表字段映射已保存。");
   });
 }
 
 async function handleExportReusable(): Promise<void> {
-  if (!template.value) return;
+  if (!bindingSetId.value) return;
 
   await runAction("正在生成可复用绑定模板…", async () => {
-    const exportedName = await downloadReusableTemplate(
-      template.value!.templateId
-    );
+    const exportedName = await downloadBindingSetReusableTemplate(bindingSetId.value);
     setStatus(`复用模板已导出：${exportedName}`);
   });
 }
@@ -379,7 +432,15 @@ async function bindField(
   locatorId: string,
   field: DataFieldNode
 ): Promise<void> {
-  if (!template.value || !field.isBindable) return;
+  if (
+    !template.value ||
+    !field.isBindable ||
+    !bindingSetId.value ||
+    !selectedDataSourceId.value
+  ) {
+    setStatus("请先选择项目、章节和数据源。", true);
+    return;
+  }
 
   const targetChart = template.value.charts.find(
     (chart) => chart.locatorId === locatorId
@@ -409,8 +470,16 @@ async function bindField(
     : `正在绑定 ${field.path}…`;
 
   await runAction(progressMessage, async () => {
-    await upsertBinding(template.value!.templateId, locatorId, field.path);
-    template.value = await getTemplate(template.value!.templateId);
+    const templateElementId =
+      targetChart?.templateElementId || targetItem?.templateElementId;
+    if (!templateElementId) throw new Error("目标缺少持久化模板元素 ID。");
+    await upsertPersistentBinding(
+      bindingSetId.value,
+      templateElementId,
+      selectedDataSourceId.value,
+      field.path
+    );
+    await refreshTemplateBindings();
     selectedLocatorId.value = locatorId;
     activeTab.value = "properties";
     refreshRenderedBindings();
@@ -423,11 +492,16 @@ async function bindField(
 }
 
 async function removeBinding(locatorId: string): Promise<void> {
-  if (!template.value) return;
+  if (!template.value || !bindingSetId.value) return;
 
   await runAction("正在取消绑定…", async () => {
-    await deleteBinding(template.value!.templateId, locatorId);
-    template.value = await getTemplate(template.value!.templateId);
+    const target = [
+      ...template.value!.mockItems,
+      ...template.value!.charts,
+    ].find((item) => item.locatorId === locatorId);
+    if (!target?.templateElementId) throw new Error("目标缺少持久化模板元素 ID。");
+    await deletePersistentBinding(bindingSetId.value, target.templateElementId);
+    await refreshTemplateBindings();
     syncSelection();
     refreshRenderedBindings();
     setStatus("绑定已取消。");
@@ -445,11 +519,13 @@ function handleFieldSelected(field: DataFieldNode): void {
 function selectMockItem(item: MockItem): void {
   selectedLocatorId.value = item.locatorId;
   activeTab.value = "properties";
+  void loadBindingPreview(item.templateElementId);
 }
 
 function selectChart(chart: ChartItem): void {
   selectedLocatorId.value = chart.locatorId;
   activeTab.value = "properties";
+  void loadBindingPreview(chart.templateElementId);
 }
 
 function focusMockItem(item: MockItem): void {
@@ -475,11 +551,15 @@ function handleClear(): void {
   fileName.value = "";
   fileSize.value = "";
   documentVisible.value = false;
+  selectedTemplateId.value = "";
   setStatus("就绪");
 }
 
 function resetTemplateState(): void {
   template.value = null;
+  versionView.value = null;
+  bindingSetId.value = "";
+  bindingPreview.value = "";
   selectedLocatorId.value = null;
   activeTab.value = "schema";
   chartStats.value = createEmptyChartStats();
@@ -523,11 +603,187 @@ function syncSelection(): void {
 }
 
 async function loadSchema(query: string): Promise<void> {
+  if (!selectedDataSourceId.value) {
+    schema.value = null;
+    return;
+  }
   try {
-    schema.value = await getSchema(query);
+    schema.value = await getPersistentSchema(selectedDataSourceId.value, query);
   } catch (error) {
     setStatus(errorMessage(error), true);
   }
+}
+
+async function loadWorkspaceContext(): Promise<void> {
+  try {
+    const [projectItems] = await Promise.all([
+      listProjects(),
+      refreshTemplateCatalog(),
+    ]);
+    projects.value = projectItems;
+    if (!selectedProjectId.value && projectItems.length > 0) {
+      selectedProjectId.value = projectItems[0].id;
+    }
+  } catch (error) {
+    setStatus(errorMessage(error), true);
+  }
+}
+
+async function refreshTemplateCatalog(): Promise<void> {
+  templateCatalog.value = await listPersistentTemplates();
+}
+
+async function loadProjectContext(): Promise<void> {
+  chapters.value = [];
+  dataSources.value = [];
+  selectedChapterId.value = "";
+  selectedDataSourceId.value = "";
+  if (!selectedProjectId.value) return;
+  try {
+    const [chapterItems, sourceItems] = await Promise.all([
+      listChapters(selectedProjectId.value),
+      listDataSources(selectedProjectId.value),
+    ]);
+    chapters.value = chapterItems;
+    dataSources.value = sourceItems;
+    selectedChapterId.value = chapterItems[0]?.id || "";
+    selectedDataSourceId.value = sourceItems[0]?.id || "";
+    if (versionView.value) await refreshBindingContext();
+  } catch (error) {
+    setStatus(errorMessage(error), true);
+  }
+}
+
+async function handleTemplateSelected(): Promise<void> {
+  if (!selectedTemplateId.value) return;
+  const taskId = ++renderTaskId;
+  cleanupPreview();
+  resetTemplateState();
+  loading.value = true;
+  loadingMessage.value = "正在从数据库加载模板版本…";
+  documentVisible.value = true;
+  try {
+    const view = await getCurrentTemplateVersion(selectedTemplateId.value);
+    versionView.value = view;
+    const file = await getTemplateVersionFile(
+      view.version.id,
+      view.file.originalName
+    );
+    fileName.value = file.name;
+    fileSize.value = formatFileSize(file.size);
+    await nextTick();
+    const containers = getViewerContainers();
+    if (!containers) throw new Error("文档预览容器未就绪。");
+    const previewResult = await processDocx(file, {
+      ...containers,
+      onProgress: handleProgress,
+    });
+    if (taskId !== renderTaskId) return;
+    chartStats.value = {
+      totalCharts: previewResult.totalCharts,
+      renderedCharts: previewResult.renderedCharts,
+      partiallyRenderedCharts: previewResult.partiallyRenderedCharts,
+      unsupportedCharts: previewResult.unsupportedCharts,
+      failedCharts: previewResult.failedCharts,
+      charts: previewResult.charts,
+    };
+    parsedCharts.value = previewResult.charts
+      .map((chart) => chart.model)
+      .filter((model): model is ParsedWordChart => model !== null);
+    await refreshBindingContext();
+    await refreshTemplateBindings();
+    decorateCurrentTemplate(containers.documentContainer);
+    setStatus(`已加载模板 ${view.template.templateName} v${view.version.versionNo}。`);
+  } catch (error) {
+    setStatus(errorMessage(error), true);
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function refreshBindingContext(): Promise<void> {
+  bindingSetId.value = "";
+  if (!versionView.value || !selectedChapterId.value) return;
+  const set = await getOrCreateBindingSet(
+    selectedChapterId.value,
+    versionView.value.version.id
+  );
+  bindingSetId.value = set.id;
+}
+
+async function refreshTemplateBindings(): Promise<void> {
+  if (!versionView.value) return;
+  const items = bindingSetId.value
+    ? await listBindingItems(bindingSetId.value)
+    : [];
+  template.value = hydrateTemplateResponse(versionView.value, items);
+}
+
+function decorateCurrentTemplate(container: HTMLElement): void {
+  if (!template.value) return;
+  const text = decorateRenderedDocument(container, template.value.mockItems, {
+    onSelect: selectMockItem,
+    onBind: (locatorId, field) => void bindField(locatorId, field),
+    onError: (message) => setStatus(message, true),
+  });
+  renderedLocatorCount.value = text.renderedCount;
+  unresolvedLocatorIds.value = text.unresolvedLocatorIds;
+  const charts = decorateRenderedCharts(container, template.value.charts, {
+    onSelect: selectChart,
+    onBind: (locatorId, field) => void bindField(locatorId, field),
+    onError: (message) => setStatus(message, true),
+  });
+  renderedChartCount.value = charts.renderedCount;
+  unresolvedChartIds.value = charts.unresolvedLocatorIds;
+}
+
+async function loadBindingPreview(
+  templateElementId?: string
+): Promise<void> {
+  bindingPreview.value = "";
+  if (!templateElementId || !bindingSetId.value) return;
+  const target = [...(template.value?.mockItems || []), ...(template.value?.charts || [])]
+    .find((item) => item.templateElementId === templateElementId);
+  if (!target?.isBound) return;
+  try {
+    const preview = await getBindingPreview(bindingSetId.value, templateElementId);
+    bindingPreview.value =
+      preview.formattedValue ?? JSON.stringify(preview, null, 2);
+  } catch (error) {
+    bindingPreview.value = errorMessage(error);
+  }
+}
+
+async function handleChapterChanged(): Promise<void> {
+  if (!versionView.value) return;
+  await runAction("正在切换章节绑定配置…", async () => {
+    await refreshBindingContext();
+    await refreshTemplateBindings();
+    refreshRenderedBindings();
+    setStatus("章节绑定配置已切换。");
+  });
+}
+
+async function handleRefreshSource(): Promise<void> {
+  if (!selectedDataSourceId.value) return;
+  await runAction("正在刷新数据源快照…", async () => {
+    await refreshDataSource(selectedDataSourceId.value);
+    await loadSchema(schemaQuery.value);
+    setStatus("数据源快照和字段元数据已刷新。");
+  });
+}
+
+async function handleValidateBindings(): Promise<void> {
+  if (!bindingSetId.value) return;
+  await runAction("正在校验绑定配置…", async () => {
+    const result = await validateBindingSet(bindingSetId.value);
+    const issue = result.items[0]?.message;
+    setStatus(
+      issue
+        ? `校验状态：${result.status}；${issue}`
+        : `校验状态：${result.status}`
+    );
+  });
 }
 
 async function runAction(
@@ -576,6 +832,76 @@ function partLabel(item: MockItem): string {
       @export-reusable="handleExportReusable"
       @generate="handleGenerate"
     />
+
+    <section class="workspace-context" aria-label="持久化工作区上下文">
+      <label>
+        <span>项目</span>
+        <select v-model="selectedProjectId" :disabled="loading">
+          <option value="">选择项目</option>
+          <option v-for="item in projects" :key="item.id" :value="item.id">
+            {{ item.projectCode }} · {{ item.projectName }}
+          </option>
+        </select>
+      </label>
+      <label>
+        <span>章节</span>
+        <select
+          v-model="selectedChapterId"
+          :disabled="loading || !selectedProjectId"
+          @change="handleChapterChanged"
+        >
+          <option value="">选择章节</option>
+          <option v-for="item in chapters" :key="item.id" :value="item.id">
+            {{ item.chapterCode }} · {{ item.title }}
+          </option>
+        </select>
+      </label>
+      <label>
+        <span>模板</span>
+        <select
+          v-model="selectedTemplateId"
+          :disabled="loading"
+          @change="handleTemplateSelected"
+        >
+          <option value="">上传时新建模板</option>
+          <option v-for="item in templateCatalog" :key="item.id" :value="item.id">
+            {{ item.templateCode }} · {{ item.templateName }}
+          </option>
+        </select>
+      </label>
+      <label>
+        <span>数据源</span>
+        <select
+          v-model="selectedDataSourceId"
+          :disabled="loading || !selectedProjectId"
+        >
+          <option value="">选择数据源</option>
+          <option v-for="item in dataSources" :key="item.id" :value="item.id">
+            {{ item.sourceCode }} · {{ item.sourceName }}
+          </option>
+        </select>
+      </label>
+      <button
+        type="button"
+        class="context-action"
+        :disabled="loading || !selectedDataSourceId"
+        @click="handleRefreshSource"
+      >
+        刷新快照
+      </button>
+      <button
+        type="button"
+        class="context-action"
+        :disabled="loading || !bindingSetId"
+        @click="handleValidateBindings"
+      >
+        校验绑定
+      </button>
+      <small>
+        绑定集 {{ bindingSetId || "—" }} · 模板版本
+        {{ versionView?.version.id || "—" }}
+      </small>
+    </section>
 
     <div class="workspace">
       <aside class="workspace-panel left-panel">
@@ -744,6 +1070,8 @@ function partLabel(item: MockItem): string {
             <div><dt>起始偏移</dt><dd>{{ selectedItem.locator.startOffset }}</dd></div>
             <div><dt>已绑定字段</dt><dd>{{ selectedItem.boundDataPath || "未绑定" }}</dd></div>
             <div><dt>字段类型</dt><dd>{{ selectedItem.boundDataType || "—" }}</dd></div>
+            <div><dt>绑定预览</dt><dd>{{ bindingPreview || "—" }}</dd></div>
+            <div><dt>TemplateElementId</dt><dd>{{ selectedItem.templateElementId || "—" }}</dd></div>
             <div><dt>LocatorId</dt><dd>{{ selectedItem.locatorId }}</dd></div>
           </dl>
           <dl v-else-if="selectedChart">
@@ -754,6 +1082,8 @@ function partLabel(item: MockItem): string {
             <div><dt>系列</dt><dd>{{ selectedChart.series.map(series => series.name).join('、') }}</dd></div>
             <div><dt>文档部件</dt><dd>{{ selectedChart.locator.partKey }}</dd></div>
             <div><dt>已绑定集合</dt><dd>{{ selectedChart.boundDataPath || "未绑定" }}</dd></div>
+            <div><dt>绑定预览</dt><dd>{{ bindingPreview || "—" }}</dd></div>
+            <div><dt>TemplateElementId</dt><dd>{{ selectedChart.templateElementId || "—" }}</dd></div>
             <div><dt>LocatorId</dt><dd>{{ selectedChart.locatorId }}</dd></div>
           </dl>
         </section>

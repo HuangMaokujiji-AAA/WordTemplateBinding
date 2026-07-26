@@ -10,6 +10,16 @@ namespace WordTemplateBinding.Core.Interfaces;
 public interface IWordTemplateScanner
 {
     /// <summary>
+    /// 从可定位的 DOCX 流扫描模板；扫描器不负责文件存储。
+    /// </summary>
+    /// <param name="seekableDocxStream">可读、可定位的 DOCX 流。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>返回模板扫描结果。</returns>
+    Task<TemplateScanResult> ScanAsync(
+        Stream seekableDocxStream,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// 扫描原始 DOCX 字节并构建模拟数据与预览结果。
     /// </summary>
     /// <param name="templateBytes">原始模板字节。</param>

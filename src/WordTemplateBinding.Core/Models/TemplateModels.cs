@@ -52,6 +52,16 @@ public sealed record MockDataItem
     /// 普通数字识别结果为 <see langword="null"/>。
     /// </summary>
     public string? PlaceholderCandidatePath { get; init; }
+
+    /// <summary>
+    /// 获取识别来源。
+    /// </summary>
+    public string RecognitionKind { get; init; } = "Unknown";
+
+    /// <summary>
+    /// 获取包含当前标记的内容控件 Tag；不存在稳定 Tag 时为空。
+    /// </summary>
+    public string? ContentControlTag { get; init; }
 }
 
 /// <summary>
@@ -83,6 +93,12 @@ public sealed record TemplateScanResult
     /// 获取从本系统自定义 XML 部件读取的复用模板清单。
     /// </summary>
     public ReusableTemplateManifest BindingManifest { get; init; } = new();
+
+    /// <summary>
+    /// 获取扫描过程中产生的非阻断警告。
+    /// </summary>
+    public IReadOnlyList<TemplateParseWarning> Warnings { get; init; } =
+        Array.Empty<TemplateParseWarning>();
 }
 
 /// <summary>
