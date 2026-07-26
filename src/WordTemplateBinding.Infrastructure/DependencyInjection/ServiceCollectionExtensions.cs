@@ -99,6 +99,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IClock>(SystemClock.Instance);
         services.AddSingleton<IDataSchemaProvider, InMemoryDataSchemaProvider>();
         services.AddSingleton<IDataValueProvider, InMemoryDataValueProvider>();
+        services.AddSingleton<ICurrentUserContext, DevelopmentCurrentUserContext>();
+        services.AddSingleton<IDevelopmentDataSourceInitializer, JsonDevelopmentDataSourceInitializer>();
         services.AddSingleton<ILocatorIdGenerator, LocatorIdGenerator>();
         services.AddSingleton<IDocumentPreviewBuilder, DocumentPreviewBuilder>();
         services.AddSingleton<IDataValueFormatter, DataValueFormatter>();
@@ -177,6 +179,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IDataFieldRepository, MySqlDataFieldRepository>();
         services.AddSingleton<IBindingSetRepository, MySqlBindingSetRepository>();
         services.AddSingleton<IBindingItemRepository, MySqlBindingItemRepository>();
+        services.AddSingleton<IAuditLogWriter, MySqlAuditLogWriter>();
     }
 
     private static void AddInMemoryPersistence(IServiceCollection services)
@@ -194,6 +197,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IDataFieldRepository, InMemoryDataFieldRepository>();
         services.AddSingleton<IBindingSetRepository, InMemoryBindingSetRepository>();
         services.AddSingleton<IBindingItemRepository, InMemoryBindingItemRepository>();
+        services.AddSingleton<IAuditLogWriter, NoOpAuditLogWriter>();
     }
 
     private static void ValidateOptions(object options) =>

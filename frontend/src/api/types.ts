@@ -424,11 +424,14 @@ export interface TemplateVersionView {
 }
 
 export interface ProjectRecord {
-  id: string;
+  projectId: string;
   projectCode: string;
   projectName: string;
   description: string | null;
   projectStatus: string;
+  createdAt: string;
+  updatedAt: string;
+  rowVersion: number;
 }
 
 export interface ChapterRecord {
@@ -441,6 +444,9 @@ export interface ChapterRecord {
   sortKey: number;
   workflowStatus: string;
   isEnabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+  rowVersion: number;
 }
 
 export interface DataSourceRecord {

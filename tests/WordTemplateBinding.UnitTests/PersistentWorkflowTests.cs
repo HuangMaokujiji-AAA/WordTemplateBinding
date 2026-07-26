@@ -3,6 +3,7 @@ using WordTemplateBinding.Core.Interfaces;
 using WordTemplateBinding.Core.Models;
 using WordTemplateBinding.Core.Options;
 using WordTemplateBinding.Core.Services;
+using WordTemplateBinding.Infrastructure.DataSchema;
 using WordTemplateBinding.Infrastructure.OpenXml;
 using WordTemplateBinding.Infrastructure.Stores;
 
@@ -208,7 +209,8 @@ public sealed class PersistentWorkflowTests
             {
                 DefaultActorUserId = "1",
             };
-            Projects = new ProjectChapterService(projects, _chapters, identity);
+            Projects = new ProjectChapterService(projects, _chapters,
+                new DevelopmentCurrentUserContext(identity));
             Sources = new InMemoryDataSourceRepository(_state);
             Snapshots = new InMemoryDataSnapshotRepository(_state);
             Fields = new InMemoryDataFieldRepository(_state);

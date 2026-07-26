@@ -142,6 +142,15 @@ public sealed record TemplateCreateRequest
     public string? Description { get; init; }
 }
 
+public sealed record UpdateTemplateRequest
+{
+    public string? TemplateName { get; init; }
+    public string? CategoryCode { get; init; }
+    public string? Description { get; init; }
+    public string? TemplateStatus { get; init; }
+    public uint ExpectedRowVersion { get; init; }
+}
+
 public sealed record TemplateListQuery
 {
     public string? Name { get; init; }
@@ -176,6 +185,7 @@ public sealed record ProjectRecord
     public required string ProjectStatus { get; init; }
     public required DateTimeOffset CreatedAt { get; init; }
     public required DateTimeOffset UpdatedAt { get; init; }
+    public required uint RowVersion { get; init; }
 }
 
 public sealed record ChapterRecord
@@ -190,6 +200,8 @@ public sealed record ChapterRecord
     public required string WorkflowStatus { get; init; }
     public required bool IsEnabled { get; init; }
     public required DateTimeOffset CreatedAt { get; init; }
+    public required DateTimeOffset UpdatedAt { get; init; }
+    public required uint RowVersion { get; init; }
 }
 
 public sealed record DataConnectionConfig(
@@ -279,6 +291,16 @@ public sealed record DataFieldRecord
 }
 
 public sealed record DataSchemaContext(ulong DataSourceId, ulong? SnapshotId = null);
+
+public sealed record DevelopmentDataSourceInitializationResult
+{
+    public required ulong ProjectId { get; init; }
+    public required ulong DataSourceId { get; init; }
+    public required ulong SnapshotId { get; init; }
+    public required int FieldCount { get; init; }
+    public required bool Created { get; init; }
+    public required bool Refreshed { get; init; }
+}
 
 public sealed record BindingSetRecord
 {

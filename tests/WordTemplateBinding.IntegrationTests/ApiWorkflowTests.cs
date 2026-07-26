@@ -2,14 +2,14 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
-using Microsoft.AspNetCore.Mvc.Testing;
 
 namespace WordTemplateBinding.IntegrationTests;
 
 /// <summary>
 /// 验证模板上传、绑定、报告生成和错误响应的完整 HTTP 闭环。
 /// </summary>
-public sealed class ApiWorkflowTests : IClassFixture<WebApplicationFactory<Program>>
+public sealed class ApiWorkflowTests
+    : IClassFixture<IntegrationWebApplicationFactory>
 {
     private const string DocxContentType =
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
@@ -18,8 +18,8 @@ public sealed class ApiWorkflowTests : IClassFixture<WebApplicationFactory<Progr
     /// <summary>
     /// 初始化 API 集成测试。
     /// </summary>
-    /// <param name="factory">ASP.NET Core 测试应用工厂。</param>
-    public ApiWorkflowTests(WebApplicationFactory<Program> factory)
+    /// <param name="factory">隔离外部配置的 ASP.NET Core 测试应用工厂。</param>
+    public ApiWorkflowTests(IntegrationWebApplicationFactory factory)
     {
         _client = factory.CreateClient();
     }

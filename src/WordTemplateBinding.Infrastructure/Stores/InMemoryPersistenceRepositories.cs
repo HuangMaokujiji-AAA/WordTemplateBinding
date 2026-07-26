@@ -128,6 +128,81 @@ public sealed class InMemoryTemplateRepository : ITemplateRepository
             query.Page,
             query.PageSize));
     }
+
+    public Task<bool> UpdateAsync(
+        ulong templateId,
+        UpdateTemplateRequest request,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_state.SyncRoot)
+        {
+            if (!_state.Templates.TryGetValue(templateId, out TemplateRecord? existing))
+            {
+                return Task.FromResult(false);
+            }
+
+            if (existing.RowVersion != request.ExpectedRowVersion)
+            {
+                return Task.FromResult(false);
+            }
+
+            _state.Templates[templateId] = existing with
+            {
+                TemplateName = request.TemplateName ?? existing.TemplateName,
+                CategoryCode = request.CategoryCode ?? existing.CategoryCode,
+                Description = request.Description ?? existing.Description,
+                TemplateStatus = request.TemplateStatus ?? existing.TemplateStatus,
+                UpdatedAt = DateTimeOffset.UtcNow,
+                RowVersion = existing.RowVersion + 1,
+            };
+            return Task.FromResult(true);
+        }
+    }
+
+    public Task<bool> ArchiveAsync(
+        ulong templateId,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_state.SyncRoot)
+        {
+            if (!_state.Templates.TryGetValue(templateId, out TemplateRecord? existing))
+            {
+                return Task.FromResult(false);
+            }
+
+            _state.Templates[templateId] = existing with
+            {
+                TemplateStatus = "ARCHIVED",
+                UpdatedAt = DateTimeOffset.UtcNow,
+                RowVersion = existing.RowVersion + 1,
+            };
+            return Task.FromResult(true);
+        }
+    }
+
+    public Task<bool> RestoreAsync(
+        ulong templateId,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_state.SyncRoot)
+        {
+            if (!_state.Templates.TryGetValue(templateId, out TemplateRecord? existing))
+            {
+                return Task.FromResult(false);
+            }
+
+            _state.Templates[templateId] = existing with
+            {
+                TemplateStatus = "ACTIVE",
+                UpdatedAt = DateTimeOffset.UtcNow,
+                RowVersion = existing.RowVersion + 1,
+            };
+            return Task.FromResult(true);
+        }
+    }
 }
 
 public sealed class InMemoryTemplateVersionRepository : ITemplateVersionRepository
@@ -388,6 +463,7 @@ public sealed class InMemoryProjectRepository : IProjectRepository
                 ProjectStatus = "DRAFT",
                 CreatedAt = now,
                 UpdatedAt = now,
+                RowVersion = 1,
             };
             _state.Projects[id] = result;
             return Task.FromResult(result);
@@ -401,14 +477,119 @@ public sealed class InMemoryProjectRepository : IProjectRepository
         return Task.FromResult(result);
     }
 
-    public Task<IReadOnlyList<ProjectRecord>> ListAsync(CancellationToken cancellationToken)
+    public Task<ProjectRecord?> GetByCodeAsync(
+        string code,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult<IReadOnlyList<ProjectRecord>>(
-            _state.Projects.Values
-                .OrderByDescending(item => item.UpdatedAt)
-                .ToList()
-                .AsReadOnly());
+        ProjectRecord? result = _state.Projects.Values
+            .FirstOrDefault(p =>
+                string.Equals(p.ProjectCode, code, StringComparison.Ordinal));
+        return Task.FromResult(result);
+    }
+
+    public Task<PagedResult<ProjectRecord>> ListAsync(
+        string? query,
+        string? status,
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        IEnumerable<ProjectRecord> filtered = _state.Projects.Values;
+        if (!string.IsNullOrWhiteSpace(query))
+        {
+            string q = query.Trim();
+            filtered = filtered.Where(p =>
+                p.ProjectCode.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                p.ProjectName.Contains(q, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (!string.IsNullOrWhiteSpace(status))
+        {
+            string s = status.Trim();
+            filtered = filtered.Where(p =>
+                string.Equals(p.ProjectStatus, s, StringComparison.Ordinal));
+        }
+
+        IReadOnlyList<ProjectRecord> all = filtered
+            .OrderByDescending(p => p.UpdatedAt)
+            .ThenByDescending(p => p.Id)
+            .ToList()
+            .AsReadOnly();
+        long total = all.Count;
+        IReadOnlyList<ProjectRecord> items = all
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .ToList()
+            .AsReadOnly();
+        return Task.FromResult(new PagedResult<ProjectRecord>(items, total, page, pageSize));
+    }
+
+    public Task<bool> UpdateAsync(
+        ulong projectId,
+        string name,
+        string? description,
+        string? status,
+        uint expectedRowVersion,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_state.SyncRoot)
+        {
+            if (!_state.Projects.TryGetValue(projectId, out ProjectRecord? existing))
+            {
+                return Task.FromResult(false);
+            }
+
+            if (existing.RowVersion != expectedRowVersion)
+            {
+                return Task.FromResult(false);
+            }
+
+            _state.Projects[projectId] = existing with
+            {
+                ProjectName = name,
+                Description = description,
+                ProjectStatus = status ?? existing.ProjectStatus,
+                UpdatedAt = DateTimeOffset.UtcNow,
+                RowVersion = existing.RowVersion + 1,
+            };
+            return Task.FromResult(true);
+        }
+    }
+
+    public Task<bool> ArchiveAsync(
+        ulong projectId,
+        uint expectedRowVersion,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_state.SyncRoot)
+        {
+            if (!_state.Projects.TryGetValue(projectId, out ProjectRecord? existing))
+            {
+                return Task.FromResult(false);
+            }
+
+            if (existing.RowVersion != expectedRowVersion)
+            {
+                return Task.FromResult(false);
+            }
+
+            _state.Projects.TryRemove(projectId, out _);
+            return Task.FromResult(true);
+        }
+    }
+
+    public Task<bool> RestoreAsync(
+        ulong projectId,
+        uint expectedRowVersion,
+        CancellationToken cancellationToken)
+    {
+        // In-memory repository does not support soft-delete lifecycle;
+        // restoration is a no-op since ArchiveAsync removes the record entirely.
+        return Task.FromResult(false);
     }
 }
 
@@ -450,6 +631,8 @@ public sealed class InMemoryChapterRepository : IChapterRepository
                 WorkflowStatus = "PENDING",
                 IsEnabled = true,
                 CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+                RowVersion = 1,
             };
             _state.Chapters[id] = result;
             return Task.FromResult(result);
@@ -474,6 +657,111 @@ public sealed class InMemoryChapterRepository : IChapterRepository
                 .OrderBy(item => item.SortKey)
                 .ToList()
                 .AsReadOnly());
+    }
+
+    public Task<bool> UpdateAsync(
+        ulong chapterId,
+        string code,
+        string title,
+        uint expectedRowVersion,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_state.SyncRoot)
+        {
+            if (!_state.Chapters.TryGetValue(chapterId, out ChapterRecord? existing))
+            {
+                return Task.FromResult(false);
+            }
+
+            if (existing.RowVersion != expectedRowVersion)
+            {
+                return Task.FromResult(false);
+            }
+
+            _state.Chapters[chapterId] = existing with
+            {
+                ChapterCode = code,
+                Title = title,
+                UpdatedAt = DateTimeOffset.UtcNow,
+                RowVersion = existing.RowVersion + 1,
+            };
+            return Task.FromResult(true);
+        }
+    }
+
+    public Task<bool> DeleteAsync(
+        ulong chapterId,
+        uint expectedRowVersion,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_state.SyncRoot)
+        {
+            if (!_state.Chapters.TryGetValue(chapterId, out ChapterRecord? existing))
+            {
+                return Task.FromResult(false);
+            }
+
+            if (existing.RowVersion != expectedRowVersion)
+            {
+                return Task.FromResult(false);
+            }
+
+            _state.Chapters.TryRemove(chapterId, out _);
+            return Task.FromResult(true);
+        }
+    }
+
+    public Task<bool> ReorderAsync(
+        ulong projectId,
+        IReadOnlyList<(ulong ChapterId, ulong? ParentId, decimal SortKey)> items,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_state.SyncRoot)
+        {
+            foreach ((ulong chapterId, ulong? parentId, decimal sortKey) in items)
+            {
+                if (!_state.Chapters.TryGetValue(chapterId, out ChapterRecord? existing))
+                {
+                    continue;
+                }
+
+                if (existing.ProjectId != projectId)
+                {
+                    continue;
+                }
+
+                _state.Chapters[chapterId] = existing with
+                {
+                    ParentId = parentId,
+                    SortKey = sortKey,
+                    UpdatedAt = DateTimeOffset.UtcNow,
+                    RowVersion = existing.RowVersion + 1,
+                };
+            }
+
+            return Task.FromResult(true);
+        }
+    }
+
+    public Task<int> CountAsync(
+        ulong projectId,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        int count = _state.Chapters.Values.Count(item => item.ProjectId == projectId);
+        return Task.FromResult(count);
+    }
+
+    public Task<bool> HasChildrenAsync(
+        ulong chapterId,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        bool hasChildren = _state.Chapters.Values.Any(item => item.ParentId == chapterId);
+        return Task.FromResult(hasChildren);
     }
 }
 

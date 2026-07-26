@@ -1,0 +1,60 @@
+{
+  "Report": {
+    "Str1": "四年级学生科学",
+    "Str2": "监测总览",
+    "Str3": "报告总结",
+    "Title": "本年度学生成绩统计报告",
+    "GeneratedAt": "2026-07-17T00:00:00Z",
+    "IsFinal": true,
+    "ReportYear": 2026,
+    "SchoolName": "测试学校"
+  },
+  "StudentStatistics": {
+    "AverageScore": 543,
+    "StudentCount": 209,
+    "PassRate": 96.8,
+    "ProvinceAverageScore": 506
+  },
+  "ChartData": {
+    "ScienceScores": [
+      { "Category": "四年级", "你县": 552, "全省": 506 },
+      { "Category": "八年级", "你县": 518, "全省": 493 }
+    ],
+    "QuarterlySales": [
+      { "quarter": "第一季度", "onlineSales": 1280, "offlineSales": 3420, "totalSales": 4700 },
+      { "quarter": "第二季度", "onlineSales": 1560, "offlineSales": 3890, "totalSales": 5450 },
+      { "quarter": "第三季度", "onlineSales": 1420, "offlineSales": 4010, "totalSales": 5430 },
+      { "quarter": "第四季度", "onlineSales": 1890, "offlineSales": 4520, "totalSales": 6410 }
+    ],
+    "RegionGDP": [
+      { "region": "华东地区", "gdp": 48650, "growthRate": 5.8 },
+      { "region": "华南地区", "gdp": 34120, "growthRate": 6.2 },
+      { "region": "华北地区", "gdp": 29870, "growthRate": 4.5 },
+      { "region": "西南地区", "gdp": 18540, "growthRate": 7.1 },
+      { "region": "西北地区", "gdp": 9620, "growthRate": 6.8 },
+      { "region": "东北地区", "gdp": 13780, "growthRate": 3.2 }
+    ],
+    "ProductRatings": [
+      { "dimension": "产品质量", "satisfaction": 92.3, "recommendation": 88.5 },
+      { "dimension": "售后服务", "satisfaction": 85.7, "recommendation": 82.1 },
+      { "dimension": "物流速度", "satisfaction": 78.4, "recommendation": 75.3 },
+      { "dimension": "价格合理", "satisfaction": 71.2, "recommendation": 68.9 },
+      { "dimension": "界面体验", "satisfaction": 89.1, "recommendation": 86.4 }
+    ],
+    "MonthlyTemperature": [
+      { "month": "1月", "maxTemp": 5.2, "minTemp": -3.8, "avgTemp": 0.7 },
+      { "month": "2月", "maxTemp": 8.1, "minTemp": -1.2, "avgTemp": 3.4 },
+      { "month": "3月", "maxTemp": 14.6, "minTemp": 3.5, "avgTemp": 9.0 },
+      { "month": "4月", "maxTemp": 21.3, "minTemp": 9.8, "avgTemp": 15.5 },
+      { "month": "5月", "maxTemp": 26.8, "minTemp": 15.2, "avgTemp": 21.0 },
+      { "month": "6月", "maxTemp": 30.5, "minTemp": 20.1, "avgTemp": 25.3 },
+      { "month": "7月", "maxTemp": 33.2, "minTemp": 23.6, "avgTemp": 28.4 },
+      { "month": "8月", "maxTemp": 32.1, "minTemp": 22.8, "avgTemp": 27.5 },
+      { "month": "9月", "maxTemp": 27.4, "minTemp": 17.5, "avgTemp": 22.4 },
+      { "month": "10月", "maxTemp": 21.8, "minTemp": 11.2, "avgTemp": 16.5 },
+      { "month": "11月", "maxTemp": 13.5, "minTemp": 4.6, "avgTemp": 9.0 },
+      { "month": "12月", "maxTemp": 7.8, "minTemp": -1.5, "avgTemp": 3.1 }
+    ]
+  },
+  "DepartmentStatistics": {}
+}

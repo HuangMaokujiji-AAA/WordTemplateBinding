@@ -196,11 +196,76 @@ function getDownloadFileName(
 
 export type { DataFieldNode };
 
-export async function listPersistentTemplates(): Promise<TemplateRecord[]> {
-  const result = await requestJson<{ items: TemplateRecord[] }>(
-    "/api/templates?page=1&pageSize=100"
+export async function listPersistentTemplates(
+  params?: {
+    name?: string;
+    code?: string;
+    type?: string;
+    status?: string;
+    page?: number;
+    pageSize?: number;
+  }
+): Promise<PagedResponse<TemplateRecord>> {
+  const url = new URL("/api/templates", window.location.origin);
+  if (params?.name) url.searchParams.set("name", params.name);
+  if (params?.code) url.searchParams.set("code", params.code);
+  if (params?.type) url.searchParams.set("type", params.type);
+  if (params?.status) url.searchParams.set("status", params.status);
+  url.searchParams.set("page", String(params?.page || 1));
+  url.searchParams.set("pageSize", String(params?.pageSize || 20));
+  return requestJson<PagedResponse<TemplateRecord>>(url);
+}
+
+export function getPersistentTemplate(templateId: string): Promise<TemplateRecord> {
+  return requestJson<TemplateRecord>(
+    `/api/templates/${encodeURIComponent(templateId)}`
   );
-  return result.items;
+}
+
+export function updateTemplate(
+  templateId: string,
+  request: {
+    templateName?: string;
+    categoryCode?: string | null;
+    description?: string | null;
+    templateStatus?: string;
+    expectedRowVersion: number;
+  }
+): Promise<TemplateRecord> {
+  return requestJson<TemplateRecord>(
+    `/api/templates/${encodeURIComponent(templateId)}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    }
+  );
+}
+
+export function archiveTemplate(
+  templateId: string
+): Promise<{ archived: boolean }> {
+  return requestJson<{ archived: boolean }>(
+    `/api/templates/${encodeURIComponent(templateId)}`,
+    { method: "DELETE" }
+  );
+}
+
+export function restoreTemplate(
+  templateId: string
+): Promise<{ restored: boolean }> {
+  return requestJson<{ restored: boolean }>(
+    `/api/templates/${encodeURIComponent(templateId)}/restore`,
+    { method: "POST" }
+  );
+}
+
+export function listTemplateVersions(
+  templateId: string
+): Promise<TemplateVersionView[]> {
+  return requestJson<TemplateVersionView[]>(
+    `/api/templates/${encodeURIComponent(templateId)}/versions`
+  );
 }
 
 export async function uploadPersistentTemplate(
@@ -255,13 +320,187 @@ export async function getTemplateVersionFile(
   });
 }
 
-export function listProjects(): Promise<ProjectRecord[]> {
-  return requestJson<ProjectRecord[]>("/api/projects");
+export interface PagedResponse<T> {
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export function listProjects(params?: {
+  query?: string;
+  status?: string;
+  page?: number;
+  pageSize?: number;
+}): Promise<PagedResponse<ProjectRecord>> {
+  const url = new URL("/api/projects", window.location.origin);
+  if (params?.query) url.searchParams.set("query", params.query);
+  if (params?.status) url.searchParams.set("status", params.status);
+  url.searchParams.set("page", String(params?.page || 1));
+  url.searchParams.set("pageSize", String(params?.pageSize || 20));
+  return requestJson<PagedResponse<ProjectRecord>>(url);
+}
+
+export function getProject(projectId: string): Promise<ProjectRecord> {
+  return requestJson<ProjectRecord>(
+    `/api/projects/${encodeURIComponent(projectId)}`
+  );
+}
+
+export function createProject(request: {
+  projectCode: string;
+  projectName: string;
+  description?: string;
+}): Promise<ProjectRecord> {
+  return requestJson<ProjectRecord>("/api/projects", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+}
+
+export function updateProject(
+  projectId: string,
+  request: {
+    projectName: string;
+    description?: string | null;
+    projectStatus?: string | null;
+    rowVersion: number;
+  }
+): Promise<ProjectRecord> {
+  return requestJson<ProjectRecord>(
+    `/api/projects/${encodeURIComponent(projectId)}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    }
+  );
+}
+
+export function archiveProject(
+  projectId: string,
+  rowVersion: number
+): Promise<ProjectRecord> {
+  return requestJson<ProjectRecord>(
+    `/api/projects/${encodeURIComponent(projectId)}`,
+    {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rowVersion }),
+    }
+  );
+}
+
+export function restoreProject(
+  projectId: string,
+  rowVersion: number
+): Promise<ProjectRecord> {
+  return requestJson<ProjectRecord>(
+    `/api/projects/${encodeURIComponent(projectId)}/restore`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rowVersion }),
+    }
+  );
+}
+
+export function initializeDevDataSource(
+  projectId: string,
+  forceRefresh = false
+): Promise<{
+  projectId: string;
+  dataSourceId: string;
+  snapshotId: string;
+  fieldCount: number;
+  created: boolean;
+  refreshed: boolean;
+}> {
+  return requestJson(
+    `/api/projects/${encodeURIComponent(projectId)}/development-data-source/initialize`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ forceRefresh }),
+    }
+  );
 }
 
 export function listChapters(projectId: string): Promise<ChapterRecord[]> {
   return requestJson<ChapterRecord[]>(
     `/api/projects/${encodeURIComponent(projectId)}/chapters`
+  );
+}
+
+export function createChapter(
+  projectId: string,
+  request: {
+    chapterCode: string;
+    title: string;
+    parentId?: string | null;
+    sortKey?: number;
+  }
+): Promise<ChapterRecord> {
+  return requestJson<ChapterRecord>(
+    `/api/projects/${encodeURIComponent(projectId)}/chapters`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    }
+  );
+}
+
+export function getChapter(chapterId: string): Promise<ChapterRecord> {
+  return requestJson<ChapterRecord>(
+    `/api/chapters/${encodeURIComponent(chapterId)}`
+  );
+}
+
+export function updateChapter(
+  chapterId: string,
+  request: {
+    chapterCode: string;
+    title: string;
+    rowVersion: number;
+  }
+): Promise<ChapterRecord> {
+  return requestJson<ChapterRecord>(
+    `/api/chapters/${encodeURIComponent(chapterId)}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    }
+  );
+}
+
+export function deleteChapter(
+  chapterId: string,
+  rowVersion: number
+): Promise<{ deleted: boolean }> {
+  return requestJson<{ deleted: boolean }>(
+    `/api/chapters/${encodeURIComponent(chapterId)}`,
+    {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rowVersion }),
+    }
+  );
+}
+
+export function reorderChapters(
+  projectId: string,
+  items: Array<{ chapterId: string; parentId: string | null; sortKey: number }>
+): Promise<{ reordered: number }> {
+  return requestJson<{ reordered: number }>(
+    `/api/projects/${encodeURIComponent(projectId)}/chapters/order`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(items),
+    }
   );
 }
 

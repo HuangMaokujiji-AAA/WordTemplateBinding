@@ -58,7 +58,7 @@ public sealed class MySqlProjectRepository : IProjectRepository
     {
         const string sql = """
             SELECT id, project_code, project_name, description, project_status,
-                   created_at, updated_at
+                   created_at, updated_at, row_version
             FROM rp_project
             WHERE id = @id AND deleted_at IS NULL;
             """;
@@ -70,12 +70,30 @@ public sealed class MySqlProjectRepository : IProjectRepository
         return await reader.ReadAsync(cancellationToken) ? Map(reader) : null;
     }
 
+    public async Task<ProjectRecord?> GetByCodeAsync(
+        string code,
+        CancellationToken cancellationToken)
+    {
+        const string sql = """
+            SELECT id, project_code, project_name, description, project_status,
+                   created_at, updated_at, row_version
+            FROM rp_project
+            WHERE project_code = @code AND deleted_at IS NULL;
+            """;
+        await using MySqlConnection connection =
+            await _connections.OpenConnectionAsync(cancellationToken);
+        await using MySqlCommand command = new(sql, connection);
+        command.AddParameter("@code", code);
+        await using MySqlDataReader reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken) ? Map(reader) : null;
+    }
+
     public async Task<IReadOnlyList<ProjectRecord>> ListAsync(
         CancellationToken cancellationToken)
     {
         const string sql = """
             SELECT id, project_code, project_name, description, project_status,
-                   created_at, updated_at
+                   created_at, updated_at, row_version
             FROM rp_project
             WHERE deleted_at IS NULL
             ORDER BY updated_at DESC, id DESC;
@@ -93,6 +111,127 @@ public sealed class MySqlProjectRepository : IProjectRepository
         return records.AsReadOnly();
     }
 
+    public async Task<PagedResult<ProjectRecord>> ListAsync(
+        string? query,
+        string? status,
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken)
+    {
+        const string where = """
+            deleted_at IS NULL
+              AND (@query IS NULL OR project_code LIKE CONCAT('%', @query, '%')
+                   OR project_name LIKE CONCAT('%', @query, '%'))
+              AND (@status IS NULL OR project_status = @status)
+            """;
+        string countSql = $"SELECT COUNT(*) FROM rp_project WHERE {where};";
+        string listSql = $"""
+            SELECT id, project_code, project_name, description, project_status,
+                   created_at, updated_at, row_version
+            FROM rp_project
+            WHERE {where}
+            ORDER BY updated_at DESC, id DESC
+            LIMIT @limit OFFSET @offset;
+            """;
+
+        await using MySqlConnection connection =
+            await _connections.OpenConnectionAsync(cancellationToken);
+
+        await using MySqlCommand count = new(countSql, connection);
+        count.AddParameter("@query", NullIfBlank(query));
+        count.AddParameter("@status", NullIfBlank(status));
+        long total = Convert.ToInt64(
+            await count.ExecuteScalarAsync(cancellationToken),
+            System.Globalization.CultureInfo.InvariantCulture);
+
+        await using MySqlCommand list = new(listSql, connection);
+        list.AddParameter("@query", NullIfBlank(query));
+        list.AddParameter("@status", NullIfBlank(status));
+        list.AddParameter("@limit", pageSize);
+        list.AddParameter("@offset", checked((page - 1) * pageSize));
+        List<ProjectRecord> records = new();
+        await using MySqlDataReader reader = await list.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            records.Add(Map(reader));
+        }
+
+        return new PagedResult<ProjectRecord>(
+            records.AsReadOnly(),
+            total,
+            page,
+            pageSize);
+    }
+
+    public async Task<bool> UpdateAsync(
+        ulong projectId,
+        string name,
+        string? description,
+        string? status,
+        uint expectedRowVersion,
+        CancellationToken cancellationToken)
+    {
+        const string sql = """
+            UPDATE rp_project
+            SET project_name = @name,
+                description = @description,
+                project_status = @status,
+                updated_at = UTC_TIMESTAMP(3),
+                row_version = row_version + 1
+            WHERE id = @id AND row_version = @expectedRowVersion AND deleted_at IS NULL;
+            """;
+        await using MySqlConnection connection =
+            await _connections.OpenConnectionAsync(cancellationToken);
+        await using MySqlCommand command = new(sql, connection);
+        command.AddParameter("@id", projectId);
+        command.AddParameter("@name", name);
+        command.AddParameter("@description", description);
+        command.AddParameter("@status", status);
+        command.AddParameter("@expectedRowVersion", expectedRowVersion);
+        return await command.ExecuteNonQueryAsync(cancellationToken) > 0;
+    }
+
+    public async Task<bool> ArchiveAsync(
+        ulong projectId,
+        uint expectedRowVersion,
+        CancellationToken cancellationToken)
+    {
+        const string sql = """
+            UPDATE rp_project
+            SET deleted_at = UTC_TIMESTAMP(3),
+                row_version = row_version + 1
+            WHERE id = @id AND row_version = @expectedRowVersion AND deleted_at IS NULL;
+            """;
+        await using MySqlConnection connection =
+            await _connections.OpenConnectionAsync(cancellationToken);
+        await using MySqlCommand command = new(sql, connection);
+        command.AddParameter("@id", projectId);
+        command.AddParameter("@expectedRowVersion", expectedRowVersion);
+        return await command.ExecuteNonQueryAsync(cancellationToken) > 0;
+    }
+
+    public async Task<bool> RestoreAsync(
+        ulong projectId,
+        uint expectedRowVersion,
+        CancellationToken cancellationToken)
+    {
+        const string sql = """
+            UPDATE rp_project
+            SET deleted_at = NULL,
+                row_version = row_version + 1
+            WHERE id = @id AND row_version = @expectedRowVersion AND deleted_at IS NOT NULL;
+            """;
+        await using MySqlConnection connection =
+            await _connections.OpenConnectionAsync(cancellationToken);
+        await using MySqlCommand command = new(sql, connection);
+        command.AddParameter("@id", projectId);
+        command.AddParameter("@expectedRowVersion", expectedRowVersion);
+        return await command.ExecuteNonQueryAsync(cancellationToken) > 0;
+    }
+
+    private static string? NullIfBlank(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
     private static ProjectRecord Map(MySqlDataReader reader) => new()
     {
         Id = reader.GetUInt64("id"),
@@ -102,6 +241,7 @@ public sealed class MySqlProjectRepository : IProjectRepository
         ProjectStatus = reader.GetString("project_status"),
         CreatedAt = reader.GetDateTimeOffset("created_at"),
         UpdatedAt = reader.GetDateTimeOffset("updated_at"),
+        RowVersion = reader.GetUInt32("row_version"),
     };
 }
 
@@ -180,7 +320,8 @@ public sealed class MySqlChapterRepository : IChapterRepository
     {
         const string sql = """
             SELECT id, project_id, parent_id, chapter_code, current_title, level_no,
-                   sort_key, workflow_status, is_enabled, created_at
+                   sort_key, workflow_status, is_enabled, created_at,
+                   updated_at, row_version
             FROM rp_chapter
             WHERE id = @id AND deleted_at IS NULL;
             """;
@@ -198,7 +339,8 @@ public sealed class MySqlChapterRepository : IChapterRepository
     {
         const string sql = """
             SELECT id, project_id, parent_id, chapter_code, current_title, level_no,
-                   sort_key, workflow_status, is_enabled, created_at
+                   sort_key, workflow_status, is_enabled, created_at,
+                   updated_at, row_version
             FROM rp_chapter
             WHERE project_id = @projectId AND deleted_at IS NULL
             ORDER BY parent_id, sort_key, id;
@@ -217,6 +359,117 @@ public sealed class MySqlChapterRepository : IChapterRepository
         return records.AsReadOnly();
     }
 
+    public async Task<bool> UpdateAsync(
+        ulong chapterId,
+        string code,
+        string title,
+        uint expectedRowVersion,
+        CancellationToken cancellationToken)
+    {
+        const string sql = """
+            UPDATE rp_chapter
+            SET chapter_code = @code, current_title = @title,
+                updated_at = UTC_TIMESTAMP(3), row_version = row_version + 1
+            WHERE id = @id AND row_version = @expectedRowVersion AND deleted_at IS NULL;
+            """;
+        await using MySqlConnection connection =
+            await _connections.OpenConnectionAsync(cancellationToken);
+        await using MySqlCommand command = new(sql, connection);
+        command.AddParameter("@id", chapterId);
+        command.AddParameter("@code", code);
+        command.AddParameter("@title", title);
+        command.AddParameter("@expectedRowVersion", expectedRowVersion);
+        return await command.ExecuteNonQueryAsync(cancellationToken) == 1;
+    }
+
+    public async Task<bool> DeleteAsync(
+        ulong chapterId,
+        uint expectedRowVersion,
+        CancellationToken cancellationToken)
+    {
+        const string sql = """
+            UPDATE rp_chapter
+            SET deleted_at = UTC_TIMESTAMP(3), row_version = row_version + 1
+            WHERE id = @id AND row_version = @expectedRowVersion AND deleted_at IS NULL;
+            """;
+        await using MySqlConnection connection =
+            await _connections.OpenConnectionAsync(cancellationToken);
+        await using MySqlCommand command = new(sql, connection);
+        command.AddParameter("@id", chapterId);
+        command.AddParameter("@expectedRowVersion", expectedRowVersion);
+        return await command.ExecuteNonQueryAsync(cancellationToken) == 1;
+    }
+
+    public async Task<bool> ReorderAsync(
+        ulong projectId,
+        IReadOnlyList<(ulong ChapterId, ulong? ParentId, decimal SortKey)> items,
+        CancellationToken cancellationToken)
+    {
+        await using MySqlConnection connection =
+            await _connections.OpenConnectionAsync(cancellationToken);
+        await using MySqlTransaction transaction =
+            await connection.BeginTransactionAsync(cancellationToken);
+        const string sql = """
+            UPDATE rp_chapter
+            SET parent_id = @parentId, sort_key = @sortKey,
+                updated_at = UTC_TIMESTAMP(3), row_version = row_version + 1
+            WHERE id = @id AND project_id = @projectId AND deleted_at IS NULL;
+            """;
+        foreach (var item in items)
+        {
+            await using MySqlCommand command = new(sql, connection, transaction);
+            command.AddParameter("@id", item.ChapterId);
+            command.AddParameter("@parentId", item.ParentId);
+            command.AddParameter("@sortKey", item.SortKey);
+            command.AddParameter("@projectId", projectId);
+            if (await command.ExecuteNonQueryAsync(cancellationToken) != 1)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return false;
+            }
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+        return true;
+    }
+
+    public async Task<int> CountAsync(
+        ulong projectId,
+        CancellationToken cancellationToken)
+    {
+        const string sql = """
+            SELECT COUNT(*)
+            FROM rp_chapter
+            WHERE project_id = @projectId AND deleted_at IS NULL;
+            """;
+        await using MySqlConnection connection =
+            await _connections.OpenConnectionAsync(cancellationToken);
+        await using MySqlCommand command = new(sql, connection);
+        command.AddParameter("@projectId", projectId);
+        return Convert.ToInt32(
+            await command.ExecuteScalarAsync(cancellationToken),
+            System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    public async Task<bool> HasChildrenAsync(
+        ulong chapterId,
+        CancellationToken cancellationToken)
+    {
+        const string sql = """
+            SELECT COUNT(*)
+            FROM rp_chapter
+            WHERE parent_id = @chapterId AND deleted_at IS NULL;
+            """;
+        await using MySqlConnection connection =
+            await _connections.OpenConnectionAsync(cancellationToken);
+        await using MySqlCommand command = new(sql, connection);
+        command.AddParameter("@chapterId", chapterId);
+        long count = Convert.ToInt64(
+            await command.ExecuteScalarAsync(cancellationToken),
+            System.Globalization.CultureInfo.InvariantCulture);
+        return count > 0;
+    }
+
     private static ChapterRecord Map(MySqlDataReader reader)
     {
         int parentOrdinal = reader.GetOrdinal("parent_id");
@@ -232,6 +485,8 @@ public sealed class MySqlChapterRepository : IChapterRepository
             WorkflowStatus = reader.GetString("workflow_status"),
             IsEnabled = reader.GetBoolean(reader.GetOrdinal("is_enabled")),
             CreatedAt = reader.GetDateTimeOffset("created_at"),
+            UpdatedAt = reader.GetDateTimeOffset("updated_at"),
+            RowVersion = reader.GetUInt32("row_version"),
         };
     }
 }
@@ -399,19 +654,21 @@ public sealed class MySqlDataSourceRepository : IDataSourceRepository
                  CAST(@config AS JSON), 'MANUAL', @actor);
             SELECT LAST_INSERT_ID();
             """;
-        string config = MySqlDataAccess.SerializeJson(new
-        {
-            schema = source.SchemaName,
-            objectType = source.ObjectType,
-            objectName = source.ObjectName,
-        });
+        string config = MySqlDataAccess.SerializeJson(source.SchemaJson is not null
+            ? JsonSerializer.Deserialize<object>(source.SchemaJson)
+            : new
+            {
+                schema = source.SchemaName,
+                objectType = source.ObjectType,
+                objectName = source.ObjectName,
+            });
         try
         {
             await using MySqlConnection connection =
                 await _connections.OpenConnectionAsync(cancellationToken);
             await using MySqlCommand command = new(sql, connection);
             command.AddParameter("@projectId", source.ProjectId);
-            command.AddParameter("@connectionId", source.ConnectionId);
+            command.AddParameter("@connectionId", source.ConnectionId != 0 ? source.ConnectionId : (object)DBNull.Value);
             command.AddParameter("@code", source.SourceCode);
             command.AddParameter("@name", source.SourceName);
             command.AddParameter("@type", source.SourceType);
@@ -440,9 +697,7 @@ public sealed class MySqlDataSourceRepository : IDataSourceRepository
             SELECT id, project_id, connection_id, source_code, source_name, source_type,
                    source_status, config_json, schema_json, created_at
             FROM rp_data_source
-            WHERE id = @id AND deleted_at IS NULL
-              AND UPPER(source_type) = 'DATABASE'
-              AND connection_id IS NOT NULL;
+            WHERE id = @id AND deleted_at IS NULL;
             """;
         await using MySqlConnection connection =
             await _connections.OpenConnectionAsync(cancellationToken);
@@ -461,8 +716,6 @@ public sealed class MySqlDataSourceRepository : IDataSourceRepository
                    source_status, config_json, schema_json, created_at
             FROM rp_data_source
             WHERE project_id = @projectId AND deleted_at IS NULL
-              AND UPPER(source_type) = 'DATABASE'
-              AND connection_id IS NOT NULL
             ORDER BY created_at DESC, id DESC;
             """;
         await using MySqlConnection connection =
@@ -500,20 +753,41 @@ public sealed class MySqlDataSourceRepository : IDataSourceRepository
 
     private static DataSourceRecord Map(MySqlDataReader reader)
     {
-        using JsonDocument config = JsonDocument.Parse(reader.GetString("config_json"));
-        JsonElement root = config.RootElement;
+        int connIdOrdinal = reader.GetOrdinal("connection_id");
+        ulong connectionId = reader.IsDBNull(connIdOrdinal) ? 0 : reader.GetUInt64(connIdOrdinal);
+
+        string configJson = reader.GetString("config_json");
+        string schemaName = string.Empty;
+        string objectType = string.Empty;
+        string objectName = string.Empty;
+        try
+        {
+            using JsonDocument config = JsonDocument.Parse(configJson);
+            JsonElement root = config.RootElement;
+            schemaName = root.TryGetProperty("schema", out JsonElement schemaProp)
+                ? schemaProp.GetString() ?? string.Empty : string.Empty;
+            objectType = root.TryGetProperty("objectType", out JsonElement objectTypeProp)
+                ? objectTypeProp.GetString() ?? string.Empty : string.Empty;
+            objectName = root.TryGetProperty("objectName", out JsonElement objectNameProp)
+                ? objectNameProp.GetString() ?? string.Empty : string.Empty;
+        }
+        catch (JsonException)
+        {
+            // Non-standard config_json for JSON/API sources; leave fields empty.
+        }
+
         return new DataSourceRecord
         {
             Id = reader.GetUInt64("id"),
             ProjectId = reader.GetUInt64("project_id"),
-            ConnectionId = reader.GetUInt64("connection_id"),
+            ConnectionId = connectionId,
             SourceCode = reader.GetString("source_code"),
             SourceName = reader.GetString("source_name"),
             SourceType = reader.GetString("source_type"),
             SourceStatus = reader.GetString("source_status"),
-            SchemaName = root.GetProperty("schema").GetString() ?? string.Empty,
-            ObjectType = root.GetProperty("objectType").GetString() ?? string.Empty,
-            ObjectName = root.GetProperty("objectName").GetString() ?? string.Empty,
+            SchemaName = schemaName,
+            ObjectType = objectType,
+            ObjectName = objectName,
             SchemaJson = reader.GetNullableString("schema_json"),
             CreatedAt = reader.GetDateTimeOffset("created_at"),
         };

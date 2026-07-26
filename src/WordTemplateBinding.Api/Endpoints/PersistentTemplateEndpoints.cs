@@ -17,6 +17,9 @@ public static class PersistentTemplateEndpoints
         templates.MapGet("/", ListAsync);
         templates.MapPost("/", CreateAsync);
         templates.MapGet("/{templateId:regex(^[0-9]+$)}", GetAsync);
+        templates.MapPatch("/{templateId:regex(^[0-9]+$)}", UpdateAsync);
+        templates.MapDelete("/{templateId:regex(^[0-9]+$)}", ArchiveAsync);
+        templates.MapPost("/{templateId:regex(^[0-9]+$)}/restore", RestoreAsync);
         templates.MapGet("/{templateId:regex(^[0-9]+$)}/versions", ListVersionsAsync);
         templates.MapPost("/{templateId:regex(^[0-9]+$)}/versions", UploadVersionAsync);
         templates.MapGet("/{templateId:regex(^[0-9]+$)}/current", GetCurrentAsync);
@@ -130,6 +133,38 @@ public static class PersistentTemplateEndpoints
         return Results.Created(
             $"/api/template-versions/{result.Version.Id}",
             PersistentApiMapper.VersionView(result));
+    }
+
+    private static async Task<IResult> UpdateAsync(
+        string templateId,
+        UpdateTemplateRequest request,
+        TemplateCatalogService service,
+        CancellationToken cancellationToken) =>
+        Results.Ok(PersistentApiMapper.Template(await service.UpdateTemplateAsync(
+            DatabaseIdParser.Required(templateId, nameof(templateId)),
+            request,
+            cancellationToken)));
+
+    private static async Task<IResult> ArchiveAsync(
+        string templateId,
+        TemplateCatalogService service,
+        CancellationToken cancellationToken)
+    {
+        await service.ArchiveTemplateAsync(
+            DatabaseIdParser.Required(templateId, nameof(templateId)),
+            cancellationToken);
+        return Results.Ok(new { archived = true });
+    }
+
+    private static async Task<IResult> RestoreAsync(
+        string templateId,
+        TemplateCatalogService service,
+        CancellationToken cancellationToken)
+    {
+        await service.RestoreTemplateAsync(
+            DatabaseIdParser.Required(templateId, nameof(templateId)),
+            cancellationToken);
+        return Results.Ok(new { restored = true });
     }
 
     private static async Task<IResult> GetCurrentAsync(

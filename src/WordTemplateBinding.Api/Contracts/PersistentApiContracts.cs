@@ -6,13 +6,35 @@ namespace WordTemplateBinding.Api.Contracts;
 internal sealed record CreateProjectRequest(
     string ProjectCode,
     string ProjectName,
-    string? Description);
+    string? Description,
+    bool CreateDefaultChapter = true,
+    bool InitializeMockDataSource = true);
+
+internal sealed record UpdateProjectRequest(
+    string ProjectName,
+    string? Description,
+    string? ProjectStatus,
+    uint RowVersion);
+
+internal sealed record ArchiveProjectRequest(uint RowVersion);
 
 internal sealed record CreateChapterRequest(
     string ChapterCode,
     string Title,
     string? ParentId,
     decimal SortKey = 0);
+
+internal sealed record UpdateChapterRequest(
+    string ChapterCode,
+    string Title,
+    uint RowVersion);
+
+internal sealed record ChapterOrderItem(
+    string ChapterId,
+    string? ParentId,
+    decimal SortKey);
+
+internal sealed record DevDataSourceInitRequest(bool ForceRefresh = false);
 
 internal sealed record CreateDataConnectionRequest(
     string? ProjectId,
@@ -112,13 +134,14 @@ internal static class PersistentApiMapper
 
     internal static object Project(ProjectRecord value) => new
     {
-        id = value.Id.ToString(),
+        projectId = value.Id.ToString(),
         value.ProjectCode,
         value.ProjectName,
         value.Description,
         value.ProjectStatus,
         value.CreatedAt,
         value.UpdatedAt,
+        value.RowVersion,
     };
 
     internal static object Chapter(ChapterRecord value) => new

@@ -2,7 +2,6 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
-using Microsoft.AspNetCore.Mvc.Testing;
 
 namespace WordTemplateBinding.IntegrationTests;
 
@@ -10,14 +9,14 @@ namespace WordTemplateBinding.IntegrationTests;
 /// 验证正式数值 ID API 的模板、章节和绑定集闭环。
 /// </summary>
 public sealed class PersistentApiWorkflowTests
-    : IClassFixture<WebApplicationFactory<Program>>
+    : IClassFixture<IntegrationWebApplicationFactory>
 {
     private readonly HttpClient _client;
 
     /// <summary>
     /// 初始化持久化 API 测试客户端。
     /// </summary>
-    public PersistentApiWorkflowTests(WebApplicationFactory<Program> factory)
+    public PersistentApiWorkflowTests(IntegrationWebApplicationFactory factory)
     {
         _client = factory.CreateClient();
     }
@@ -78,7 +77,7 @@ public sealed class PersistentApiWorkflowTests
                 projectCode = $"P_{suffix}",
                 projectName = "接口项目",
             });
-        string projectId = project.GetProperty("id").GetString()!;
+        string projectId = project.GetProperty("projectId").GetString()!;
         JsonElement chapter = await PostJsonAsync(
             $"/api/projects/{projectId}/chapters",
             new

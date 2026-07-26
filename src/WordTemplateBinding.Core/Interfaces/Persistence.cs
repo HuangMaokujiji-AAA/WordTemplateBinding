@@ -41,6 +41,19 @@ public interface ITemplateRepository
     Task<PagedResult<TemplateRecord>> ListAsync(
         TemplateListQuery query,
         CancellationToken cancellationToken);
+
+    Task<bool> UpdateAsync(
+        ulong templateId,
+        UpdateTemplateRequest request,
+        CancellationToken cancellationToken);
+
+    Task<bool> ArchiveAsync(
+        ulong templateId,
+        CancellationToken cancellationToken);
+
+    Task<bool> RestoreAsync(
+        ulong templateId,
+        CancellationToken cancellationToken);
 }
 
 public interface ITemplateVersionRepository
@@ -96,7 +109,32 @@ public interface IProjectRepository
         CancellationToken cancellationToken);
 
     Task<ProjectRecord?> GetAsync(ulong id, CancellationToken cancellationToken);
-    Task<IReadOnlyList<ProjectRecord>> ListAsync(CancellationToken cancellationToken);
+    Task<ProjectRecord?> GetByCodeAsync(string code, CancellationToken cancellationToken);
+
+    Task<PagedResult<ProjectRecord>> ListAsync(
+        string? query,
+        string? status,
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken);
+
+    Task<bool> UpdateAsync(
+        ulong projectId,
+        string name,
+        string? description,
+        string? status,
+        uint expectedRowVersion,
+        CancellationToken cancellationToken);
+
+    Task<bool> ArchiveAsync(
+        ulong projectId,
+        uint expectedRowVersion,
+        CancellationToken cancellationToken);
+
+    Task<bool> RestoreAsync(
+        ulong projectId,
+        uint expectedRowVersion,
+        CancellationToken cancellationToken);
 }
 
 public interface IChapterRepository
@@ -113,6 +151,31 @@ public interface IChapterRepository
     Task<ChapterRecord?> GetAsync(ulong id, CancellationToken cancellationToken);
     Task<IReadOnlyList<ChapterRecord>> ListAsync(
         ulong projectId,
+        CancellationToken cancellationToken);
+
+    Task<bool> UpdateAsync(
+        ulong chapterId,
+        string code,
+        string title,
+        uint expectedRowVersion,
+        CancellationToken cancellationToken);
+
+    Task<bool> DeleteAsync(
+        ulong chapterId,
+        uint expectedRowVersion,
+        CancellationToken cancellationToken);
+
+    Task<bool> ReorderAsync(
+        ulong projectId,
+        IReadOnlyList<(ulong ChapterId, ulong? ParentId, decimal SortKey)> items,
+        CancellationToken cancellationToken);
+
+    Task<int> CountAsync(
+        ulong projectId,
+        CancellationToken cancellationToken);
+
+    Task<bool> HasChildrenAsync(
+        ulong chapterId,
         CancellationToken cancellationToken);
 }
 

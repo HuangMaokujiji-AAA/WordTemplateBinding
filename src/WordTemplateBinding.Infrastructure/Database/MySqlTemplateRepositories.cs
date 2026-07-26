@@ -109,6 +109,93 @@ public sealed class MySqlTemplateRepository : ITemplateRepository
             query.PageSize);
     }
 
+    public async Task<bool> UpdateAsync(
+        ulong templateId,
+        UpdateTemplateRequest request,
+        CancellationToken cancellationToken)
+    {
+        var setClauses = new List<string>();
+
+        if (request.TemplateName is not null)
+            setClauses.Add("template_name = @name");
+        if (request.CategoryCode is not null)
+            setClauses.Add("category_code = @category");
+        if (request.Description is not null)
+            setClauses.Add("description = @description");
+        if (request.TemplateStatus is not null)
+            setClauses.Add("template_status = @status");
+
+        if (setClauses.Count == 0)
+            return false;
+
+        setClauses.Add("updated_at = UTC_TIMESTAMP(3)");
+        setClauses.Add("row_version = row_version + 1");
+
+        string sql = $"""
+            UPDATE rp_template
+            SET {string.Join(", ", setClauses)}
+            WHERE id = @id AND row_version = @expectedRowVersion AND deleted_at IS NULL;
+            """;
+
+        await using MySqlConnection connection =
+            await _connections.OpenConnectionAsync(cancellationToken);
+        await using MySqlCommand command = new(sql, connection);
+        command.AddParameter("@id", templateId);
+        command.AddParameter("@expectedRowVersion", request.ExpectedRowVersion);
+        if (request.TemplateName is not null)
+            command.AddParameter("@name", request.TemplateName);
+        if (request.CategoryCode is not null)
+            command.AddParameter("@category", request.CategoryCode);
+        if (request.Description is not null)
+            command.AddParameter("@description", request.Description);
+        if (request.TemplateStatus is not null)
+            command.AddParameter("@status", request.TemplateStatus);
+
+        return await command.ExecuteNonQueryAsync(cancellationToken) == 1;
+    }
+
+    public async Task<bool> ArchiveAsync(
+        ulong templateId,
+        CancellationToken cancellationToken)
+    {
+        const string sql = """
+            UPDATE rp_template
+            SET template_status = 'ARCHIVED',
+                deleted_at = UTC_TIMESTAMP(3),
+                updated_at = UTC_TIMESTAMP(3),
+                row_version = row_version + 1
+            WHERE id = @id AND deleted_at IS NULL;
+            """;
+
+        await using MySqlConnection connection =
+            await _connections.OpenConnectionAsync(cancellationToken);
+        await using MySqlCommand command = new(sql, connection);
+        command.AddParameter("@id", templateId);
+
+        return await command.ExecuteNonQueryAsync(cancellationToken) == 1;
+    }
+
+    public async Task<bool> RestoreAsync(
+        ulong templateId,
+        CancellationToken cancellationToken)
+    {
+        const string sql = """
+            UPDATE rp_template
+            SET template_status = 'ACTIVE',
+                deleted_at = NULL,
+                updated_at = UTC_TIMESTAMP(3),
+                row_version = row_version + 1
+            WHERE id = @id AND deleted_at IS NOT NULL;
+            """;
+
+        await using MySqlConnection connection =
+            await _connections.OpenConnectionAsync(cancellationToken);
+        await using MySqlCommand command = new(sql, connection);
+        command.AddParameter("@id", templateId);
+
+        return await command.ExecuteNonQueryAsync(cancellationToken) == 1;
+    }
+
     private async Task<TemplateRecord?> GetOneAsync(
         string predicate,
         object value,

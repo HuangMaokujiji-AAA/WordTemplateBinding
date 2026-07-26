@@ -15,21 +15,38 @@ public sealed class ProjectChapterService
 {
     private readonly IProjectRepository _projects;
     private readonly IChapterRepository _chapters;
-    private readonly ApplicationIdentityOptions _identity;
+    private readonly ICurrentUserContext _user;
+    private readonly IAuditLogWriter? _audit;
 
     public ProjectChapterService(
         IProjectRepository projects,
         IChapterRepository chapters,
-        ApplicationIdentityOptions identity)
+        ICurrentUserContext user,
+        IAuditLogWriter? audit = null)
     {
         _projects = projects;
         _chapters = chapters;
-        _identity = identity;
+        _user = user;
+        _audit = audit;
     }
 
-    public Task<IReadOnlyList<ProjectRecord>> ListProjectsAsync(
+    // ── Projects ──
+
+    public async Task<IReadOnlyList<ProjectRecord>> ListProjectsAsync(
+        CancellationToken cancellationToken)
+    {
+        PagedResult<ProjectRecord> result = await _projects.ListAsync(
+            null, null, 1, int.MaxValue, cancellationToken);
+        return result.Items;
+    }
+
+    public Task<PagedResult<ProjectRecord>> QueryProjectsAsync(
+        string? query,
+        string? status,
+        int page,
+        int pageSize,
         CancellationToken cancellationToken) =>
-        _projects.ListAsync(cancellationToken);
+        _projects.ListAsync(query, status, page, pageSize, cancellationToken);
 
     public async Task<ProjectRecord> CreateProjectAsync(
         string code,
@@ -39,13 +56,90 @@ public sealed class ProjectChapterService
     {
         ValidateCode(code, "项目编码");
         ValidateName(name, "项目名称");
-        return await _projects.CreateAsync(
+        ProjectRecord project = await _projects.CreateAsync(
             code.Trim(),
             name.Trim(),
             string.IsNullOrWhiteSpace(description) ? null : description.Trim(),
-            RequireActor(),
+            _user.UserId,
             cancellationToken);
+        await TryAuditAsync("CREATE_PROJECT", "rp_project", project.Id, null, project, cancellationToken);
+        return project;
     }
+
+    public async Task<ProjectRecord> GetProjectAsync(
+        ulong projectId,
+        CancellationToken cancellationToken) =>
+        await _projects.GetAsync(projectId, cancellationToken)
+        ?? throw new WorkspaceException("project_not_found", $"找不到项目：{projectId}。");
+
+    public async Task<ProjectRecord> UpdateProjectAsync(
+        ulong projectId,
+        string name,
+        string? description,
+        string? status,
+        uint expectedRowVersion,
+        CancellationToken cancellationToken)
+    {
+        ProjectRecord before = await GetProjectAsync(projectId, cancellationToken);
+        ValidateName(name, "项目名称");
+        if (status is not null)
+        {
+            ValidateProjectStatus(status);
+        }
+
+        if (!await _projects.UpdateAsync(projectId, name.Trim(),
+                string.IsNullOrWhiteSpace(description) ? null : description.Trim(),
+                status, expectedRowVersion, cancellationToken))
+        {
+            throw new WorkspaceException(
+                "project_concurrency_conflict",
+                "项目已被其他操作修改，请刷新后重试。");
+        }
+
+        ProjectRecord after = await GetProjectAsync(projectId, cancellationToken);
+        await TryAuditAsync("UPDATE_PROJECT", "rp_project", projectId, before, after, cancellationToken);
+        return after;
+    }
+
+    public async Task<ProjectRecord> ArchiveProjectAsync(
+        ulong projectId,
+        uint expectedRowVersion,
+        CancellationToken cancellationToken)
+    {
+        ProjectRecord before = await GetProjectAsync(projectId, cancellationToken);
+        if (!await _projects.ArchiveAsync(projectId, expectedRowVersion, cancellationToken))
+        {
+            throw new WorkspaceException(
+                "project_concurrency_conflict",
+                "项目已被其他操作修改，请刷新后重试。");
+        }
+
+        ProjectRecord after = await _projects.GetAsync(projectId, cancellationToken)
+            ?? before;
+        await TryAuditAsync("ARCHIVE_PROJECT", "rp_project", projectId, before, after, cancellationToken);
+        return after;
+    }
+
+    public async Task<ProjectRecord> RestoreProjectAsync(
+        ulong projectId,
+        uint expectedRowVersion,
+        CancellationToken cancellationToken)
+    {
+        ProjectRecord before = await GetProjectAsync(projectId, cancellationToken);
+        if (!await _projects.RestoreAsync(projectId, expectedRowVersion, cancellationToken))
+        {
+            throw new WorkspaceException(
+                "project_concurrency_conflict",
+                "项目已被其他操作修改，请刷新后重试。");
+        }
+
+        ProjectRecord after = await _projects.GetAsync(projectId, cancellationToken)
+            ?? before;
+        await TryAuditAsync("RESTORE_PROJECT", "rp_project", projectId, before, after, cancellationToken);
+        return after;
+    }
+
+    // ── Chapters ──
 
     public async Task<IReadOnlyList<ChapterRecord>> ListChaptersAsync(
         ulong projectId,
@@ -74,26 +168,152 @@ public sealed class ProjectChapterService
 
         ValidateCode(code, "章节编码");
         ValidateName(title, "章节标题");
-        return await _chapters.CreateAsync(
+
+        if (parentId.HasValue)
+        {
+            ChapterRecord parent = await _chapters.GetAsync(parentId.Value, cancellationToken)
+                ?? throw new WorkspaceException("chapter_parent_invalid", "找不到父章节。");
+            if (parent.ProjectId != projectId)
+            {
+                throw new WorkspaceException(
+                    "chapter_parent_invalid",
+                    "父章节不属于当前项目。");
+            }
+        }
+
+        ChapterRecord chapter = await _chapters.CreateAsync(
             projectId,
             code.Trim(),
             title.Trim(),
             parentId,
             sortKey,
-            RequireActor(),
+            _user.UserId,
             cancellationToken);
+        await TryAuditAsync("CREATE_CHAPTER", "rp_chapter", chapter.Id, null, chapter, cancellationToken);
+        return chapter;
     }
 
-    private ulong RequireActor()
+    public async Task<ChapterRecord> GetChapterAsync(
+        ulong chapterId,
+        CancellationToken cancellationToken) =>
+        await _chapters.GetAsync(chapterId, cancellationToken)
+        ?? throw new WorkspaceException("chapter_not_found", $"找不到章节：{chapterId}。");
+
+    public async Task<ChapterRecord> UpdateChapterAsync(
+        ulong chapterId,
+        string code,
+        string title,
+        uint expectedRowVersion,
+        CancellationToken cancellationToken)
     {
-        if (!ulong.TryParse(_identity.DefaultActorUserId, out ulong actor) || actor == 0)
+        ChapterRecord before = await GetChapterAsync(chapterId, cancellationToken);
+        ValidateCode(code, "章节编码");
+        ValidateName(title, "章节标题");
+
+        if (!await _chapters.UpdateAsync(chapterId, code.Trim(), title.Trim(),
+                expectedRowVersion, cancellationToken))
         {
             throw new WorkspaceException(
-                "application_identity_not_configured",
-                "服务端尚未配置 ApplicationIdentity:DefaultActorUserId。");
+                "chapter_concurrency_conflict",
+                "章节已被其他操作修改，请刷新后重试。");
         }
 
-        return actor;
+        ChapterRecord after = await GetChapterAsync(chapterId, cancellationToken);
+        await TryAuditAsync("UPDATE_CHAPTER", "rp_chapter", chapterId, before, after, cancellationToken);
+        return after;
+    }
+
+    public async Task DeleteChapterAsync(
+        ulong chapterId,
+        uint expectedRowVersion,
+        CancellationToken cancellationToken)
+    {
+        ChapterRecord before = await GetChapterAsync(chapterId, cancellationToken);
+
+        if (await _chapters.HasChildrenAsync(chapterId, cancellationToken))
+        {
+            throw new WorkspaceException(
+                "chapter_has_children",
+                "该章节包含子章节，请先删除子章节。");
+        }
+
+        if (!await _chapters.DeleteAsync(chapterId, expectedRowVersion, cancellationToken))
+        {
+            throw new WorkspaceException(
+                "chapter_concurrency_conflict",
+                "章节已被其他操作修改，请刷新后重试。");
+        }
+
+        await TryAuditAsync("DELETE_CHAPTER", "rp_chapter", chapterId, before, null, cancellationToken);
+    }
+
+    public async Task ReorderChaptersAsync(
+        ulong projectId,
+        IReadOnlyList<(ulong ChapterId, ulong? ParentId, decimal SortKey)> items,
+        CancellationToken cancellationToken)
+    {
+        if (items.Count == 0)
+        {
+            return;
+        }
+
+        if (await _projects.GetAsync(projectId, cancellationToken) is null)
+        {
+            throw new WorkspaceException("project_not_found", $"找不到项目：{projectId}。");
+        }
+
+        // Validate all chapter IDs belong to the project
+        foreach (var (chapterId, parentId, _) in items)
+        {
+            ChapterRecord chapter = await _chapters.GetAsync(chapterId, cancellationToken)
+                ?? throw new WorkspaceException("chapter_not_found", $"找不到章节：{chapterId}。");
+            if (chapter.ProjectId != projectId)
+            {
+                throw new WorkspaceException(
+                    "chapter_not_found",
+                    $"章节 {chapterId} 不属于当前项目。");
+            }
+
+            if (parentId.HasValue)
+            {
+                ChapterRecord parent = await _chapters.GetAsync(parentId.Value, cancellationToken)
+                    ?? throw new WorkspaceException("chapter_parent_invalid", "找不到父章节。");
+                if (parent.ProjectId != projectId)
+                {
+                    throw new WorkspaceException(
+                        "chapter_parent_invalid",
+                        "父章节不属于当前项目。");
+                }
+            }
+        }
+
+        if (!await _chapters.ReorderAsync(projectId, items, cancellationToken))
+        {
+            throw new WorkspaceException(
+                "chapter_reorder_failed",
+                "章节排序失败。");
+        }
+
+        await TryAuditAsync("REORDER_CHAPTER", "rp_chapter", projectId, null,
+            ToJson(new { itemCount = items.Count }), cancellationToken);
+    }
+
+    public Task<int> CountChaptersAsync(
+        ulong projectId,
+        CancellationToken cancellationToken) =>
+        _chapters.CountAsync(projectId, cancellationToken);
+
+    // ── Helpers ──
+
+    private static void ValidateProjectStatus(string status)
+    {
+        string[] valid = { "DRAFT", "CONFIGURING", "READY", "GENERATING", "COMPLETED", "ARCHIVED" };
+        if (!valid.Contains(status, StringComparer.OrdinalIgnoreCase))
+        {
+            throw new WorkspaceException(
+                "invalid_project_status",
+                $"无效的项目状态：{status}。允许：{string.Join(", ", valid)}。");
+        }
     }
 
     private static void ValidateCode(string value, string label)
@@ -118,6 +338,45 @@ public sealed class ProjectChapterService
                 $"{label}不能为空且长度不能超过 255。");
         }
     }
+
+    private async Task TryAuditAsync(
+        string action,
+        string targetType,
+        ulong targetId,
+        object? before,
+        object? after,
+        CancellationToken cancellationToken)
+    {
+        if (_audit is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _audit.WriteAsync(
+                action,
+                targetType,
+                targetId,
+                _user.UserId,
+                ToJson(before),
+                ToJson(after),
+                null,
+                cancellationToken);
+        }
+        catch
+        {
+            // Audit failure must not break business operations.
+        }
+    }
+
+    private static string? ToJson(object? value) =>
+        value is null ? null : JsonSerializer.Serialize(value, JsonOptions);
+
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+    };
 }
 
 public sealed record DataConnectionTestResult(
@@ -369,24 +628,54 @@ public sealed class DataSourceWorkspaceService
             throw new WorkspaceException("project_not_found", $"找不到项目：{projectId}。");
         }
 
-        DataConnectionRecord connection = await _connections.GetAsync(
-            connectionId,
-            cancellationToken)
-            ?? throw new WorkspaceException(
-                "data_connection_not_found",
-                $"找不到数据连接：{connectionId}。");
-        if (connection.ProjectId.HasValue && connection.ProjectId != projectId)
-        {
-            throw new WorkspaceException(
-                "cross_project_binding_forbidden",
-                "数据连接不属于当前项目。");
-        }
+        bool isDatabase = string.Equals(sourceType, "DATABASE", StringComparison.OrdinalIgnoreCase);
+        bool isJson = string.Equals(sourceType, "JSON", StringComparison.OrdinalIgnoreCase);
 
-        if (!string.Equals(sourceType, "DATABASE", StringComparison.OrdinalIgnoreCase))
+        if (!isDatabase && !isJson)
         {
             throw new WorkspaceException(
                 "unsupported_data_source_type",
-                "本阶段只支持 DATABASE 数据源。");
+                "本阶段只支持 DATABASE 和 JSON 数据源。");
+        }
+
+        if (isDatabase && connectionId == 0)
+        {
+            throw new WorkspaceException(
+                "invalid_data_source",
+                "DATABASE 数据源必须指定连接 ID。");
+        }
+
+        // Validate connection for DATABASE sources (skip for JSON)
+        string? validatedObjectType = objectType;
+        string? validatedObjectName = objectName;
+        if (isDatabase)
+        {
+            DataConnectionRecord connection = await _connections.GetAsync(
+                connectionId, cancellationToken)
+                ?? throw new WorkspaceException(
+                    "data_connection_not_found",
+                    $"找不到数据连接：{connectionId}。");
+            if (connection.ProjectId.HasValue && connection.ProjectId != projectId)
+            {
+                throw new WorkspaceException(
+                    "cross_project_binding_forbidden",
+                    "数据连接不属于当前项目。");
+            }
+
+            IReadOnlyList<DatabaseObjectInfo> objects =
+                await _introspector.ListObjectsAsync(connection, schema, cancellationToken);
+            DatabaseObjectInfo? selected = objects.FirstOrDefault(item =>
+                string.Equals(item.ObjectName, objectName, StringComparison.Ordinal) &&
+                string.Equals(item.ObjectType, objectType, StringComparison.OrdinalIgnoreCase));
+            if (selected is null)
+            {
+                throw new WorkspaceException(
+                    "data_source_not_found",
+                    $"数据库对象 {schema}.{objectName} 不存在或类型不匹配。");
+            }
+
+            validatedObjectType = selected.ObjectType;
+            validatedObjectName = objectName;
         }
 
         if (string.IsNullOrWhiteSpace(sourceCode) ||
@@ -401,18 +690,6 @@ public sealed class DataSourceWorkspaceService
                 "数据源编码只能包含字母、数字、下划线和连字符，名称不能为空。");
         }
 
-        IReadOnlyList<DatabaseObjectInfo> objects =
-            await _introspector.ListObjectsAsync(connection, schema, cancellationToken);
-        DatabaseObjectInfo? selected = objects.FirstOrDefault(item =>
-            string.Equals(item.ObjectName, objectName, StringComparison.Ordinal) &&
-            string.Equals(item.ObjectType, objectType, StringComparison.OrdinalIgnoreCase));
-        if (selected is null)
-        {
-            throw new WorkspaceException(
-                "data_source_not_found",
-                $"数据库对象 {schema}.{objectName} 不存在或类型不匹配。");
-        }
-
         return await _sources.CreateAsync(
             new DataSourceRecord
             {
@@ -421,11 +698,11 @@ public sealed class DataSourceWorkspaceService
                 ConnectionId = connectionId,
                 SourceCode = sourceCode.Trim(),
                 SourceName = sourceName.Trim(),
-                SourceType = "DATABASE",
+                SourceType = isDatabase ? "DATABASE" : "JSON",
                 SourceStatus = "ACTIVE",
                 SchemaName = schema,
-                ObjectType = selected.ObjectType,
-                ObjectName = objectName,
+                ObjectType = validatedObjectType ?? string.Empty,
+                ObjectName = validatedObjectName ?? string.Empty,
                 SchemaJson = null,
                 CreatedAt = DateTimeOffset.UtcNow,
             },
@@ -438,6 +715,17 @@ public sealed class DataSourceWorkspaceService
         CancellationToken cancellationToken)
     {
         DataSourceRecord source = await GetAsync(dataSourceId, cancellationToken);
+
+        // JSON sources are refreshed through the development data source initializer.
+        // Return the latest ready snapshot if one exists.
+        if (string.Equals(source.SourceType, "JSON", StringComparison.OrdinalIgnoreCase))
+        {
+            return await _snapshots.GetLatestReadyAsync(source.Id, cancellationToken)
+                ?? throw new WorkspaceException(
+                    "data_snapshot_not_ready",
+                    $"JSON 数据源 {dataSourceId} 尚无 READY 快照。请先初始化测试数据。");
+        }
+
         DataConnectionRecord connection = await _connections.GetAsync(
             source.ConnectionId,
             cancellationToken)

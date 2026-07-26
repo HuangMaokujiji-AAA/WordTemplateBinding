@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Http.Features;
 using WordTemplateBinding.Api.Endpoints;
 using WordTemplateBinding.Api.Middleware;
 using WordTemplateBinding.Core.Options;
+using WordTemplateBinding.Infrastructure.Database;
 using WordTemplateBinding.Infrastructure.DependencyInjection;
 
 WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
@@ -18,6 +19,23 @@ Validator.ValidateObject(
     templateOptions,
     new ValidationContext(templateOptions),
     validateAllProperties: true);
+PersistenceOptions persistenceOptions =
+    builder.Configuration.GetSection(PersistenceOptions.SectionName)
+        .Get<PersistenceOptions>()
+    ?? new PersistenceOptions();
+Validator.ValidateObject(
+    persistenceOptions,
+    new ValidationContext(persistenceOptions),
+    validateAllProperties: true);
+if (string.Equals(
+        persistenceOptions.Mode,
+        "InMemory",
+        StringComparison.OrdinalIgnoreCase) &&
+    !builder.Environment.IsEnvironment("Testing"))
+{
+    throw new InvalidOperationException(
+        "InMemory 持久化仅允许自动化测试使用；实际运行请配置 Persistence:Mode=MySql。");
+}
 
 builder.Services.Configure<FormOptions>(options =>
 {
@@ -41,6 +59,20 @@ builder.Services.AddReportPlatformDatabase(builder.Configuration);
 builder.Services.AddWordTemplateBinding(builder.Configuration, templateOptions);
 
 WebApplication app = builder.Build();
+if (string.Equals(
+        persistenceOptions.Mode,
+        "MySql",
+        StringComparison.OrdinalIgnoreCase))
+{
+    IReportPlatformDatabaseConnectionFactory database =
+        app.Services.GetRequiredService<IReportPlatformDatabaseConnectionFactory>();
+    if (!database.IsConfigured)
+    {
+        throw new InvalidOperationException(
+            $"MySQL 持久化缺少必要配置：{string.Join(", ", database.MissingSettings)}。");
+    }
+}
+
 app.UseMiddleware<ApiExceptionHandler>();
 app.UseStatusCodePages();
 app.UseDefaultFiles();
@@ -48,7 +80,7 @@ app.UseStaticFiles();
 app.MapPersistentTemplateEndpoints();
 app.MapWorkspaceEndpoints();
 if (string.Equals(
-        builder.Configuration["Persistence:Mode"],
+        persistenceOptions.Mode,
         "InMemory",
         StringComparison.OrdinalIgnoreCase))
 {

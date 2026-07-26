@@ -180,6 +180,39 @@ public sealed class TemplateCatalogService
         return await ParseAsync(version, cancellationToken);
     }
 
+    public async Task<TemplateRecord> UpdateTemplateAsync(
+        ulong templateId,
+        UpdateTemplateRequest request,
+        CancellationToken cancellationToken)
+    {
+        TemplateRecord before = await GetTemplateAsync(templateId, cancellationToken);
+        await _templates.UpdateAsync(templateId, request, cancellationToken);
+        return await GetTemplateAsync(templateId, cancellationToken);
+    }
+
+    public async Task ArchiveTemplateAsync(
+        ulong templateId,
+        CancellationToken cancellationToken)
+    {
+        TemplateRecord before = await GetTemplateAsync(templateId, cancellationToken);
+        await _templates.ArchiveAsync(templateId, cancellationToken);
+    }
+
+    public async Task RestoreTemplateAsync(
+        ulong templateId,
+        CancellationToken cancellationToken)
+    {
+        await _templates.RestoreAsync(templateId, cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<TemplateVersionRecord>> GetTemplateVersionsAsync(
+        ulong templateId,
+        CancellationToken cancellationToken)
+    {
+        await GetTemplateAsync(templateId, cancellationToken);
+        return await _versions.ListAsync(templateId, cancellationToken);
+    }
+
     private async Task<TemplateVersionView> ParseAsync(
         TemplateVersionRecord version,
         CancellationToken cancellationToken)
