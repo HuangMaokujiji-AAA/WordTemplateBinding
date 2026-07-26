@@ -6,6 +6,7 @@ export type WordChartType =
   | "doughnut"
   | "area"
   | "scatter"
+  | "radar"
   | "combo"
   | "unsupported";
 
@@ -23,6 +24,9 @@ export interface WordChartSeries {
   axis?: "primary" | "secondary";
 
   color?: string;
+
+  markerSymbol?: string;
+  markerSize?: number;
 
   showValueLabel?: boolean;
   dataLabelPosition?: string;
@@ -139,6 +143,19 @@ export interface WordScatterChartModel extends WordChartModel {
   type: "scatter";
   /** Scatter style: "lineMarker" | "line" | "marker" | "smooth" */
   scatterStyle?: string;
+}
+
+// ---- Radar ----
+
+export type RadarStyle = "standard" | "marker" | "filled";
+
+export interface WordRadarChartModel extends WordChartModel {
+  type: "radar";
+  radarStyle: RadarStyle;
+  min?: number;
+  max?: number;
+  showMarker: boolean;
+  filled: boolean;
 }
 
 // ---- Combo ----

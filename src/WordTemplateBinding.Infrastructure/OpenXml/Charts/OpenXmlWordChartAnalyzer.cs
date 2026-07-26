@@ -98,16 +98,6 @@ internal static class OpenXmlWordChartAnalyzer
 
         string title = externalTitle ?? ReadChartTitle(chartElement) ?? $"图表 {chartIndex + 1}";
 
-        ChartDefinitionSnapshot definition = new()
-        {
-            Type = chartType,
-            TypeLabel = typeLabel,
-            Title = title,
-            SupportedForBinding = IsSupportedForBinding(chartType),
-            WidthEmu = 0,
-            HeightEmu = 0,
-        };
-
         // Plot Groups
         List<ChartPlotGroupSnapshot> plotGroups = new(chartTypeElements.Count);
         List<OpenXmlElement> allSeriesElements = new();
@@ -118,8 +108,32 @@ internal static class OpenXmlWordChartAnalyzer
             string groupType = ChartTypeMap.TryGetValue(groupElement.LocalName, out string? mapped)
                 ? mapped : "unsupported";
 
-            string? grouping = GetAttribute(groupElement, "grouping");
-            string? barDir = GetAttribute(groupElement, "barDir");
+            string? grouping = GetAttribute(FindChild(groupElement, "grouping"), "val");
+            string? barDir = GetAttribute(FindChild(groupElement, "barDir"), "val");
+            string? radarStyle = null;
+            if (groupType == "radar")
+            {
+                string? rawRadarStyle = GetAttribute(FindChild(groupElement, "radarStyle"), "val");
+                if (rawRadarStyle is "standard" or "marker" or "filled")
+                {
+                    radarStyle = rawRadarStyle;
+                }
+                else
+                {
+                    radarStyle = "standard";
+                    if (!string.IsNullOrWhiteSpace(rawRadarStyle))
+                    {
+                        diagnostics.Add(new ChartDiagnosticItem
+                        {
+                            Code = "radar_unknown_style",
+                            Level = "warning",
+                            Message = $"未知雷达图样式 \"{rawRadarStyle}\"，已回退为 standard。",
+                            Path = $"plot-group-{groupOrder}",
+                            Recoverable = true,
+                        });
+                    }
+                }
+            }
 
             List<OpenXmlElement> groupSeriesElements = groupElement.ChildElements
                 .Where(e => e.LocalName == "ser").ToList();
@@ -142,6 +156,7 @@ internal static class OpenXmlWordChartAnalyzer
                 Type = groupType,
                 Grouping = grouping,
                 BarDirection = barDir,
+                RadarStyle = radarStyle,
                 SeriesKeys = seriesKeys.AsReadOnly(),
                 AxisIds = axisIds.AsReadOnly(),
             });
@@ -174,6 +189,45 @@ internal static class OpenXmlWordChartAnalyzer
             });
         }
 
+        if (chartType == "radar")
+        {
+            AddRadarDiagnostics(
+                allSeriesElements,
+                seriesList,
+                categories,
+                diagnostics);
+        }
+
+        decimal? radarMinimum = null;
+        decimal? radarMaximum = null;
+        if (chartType == "radar")
+        {
+            ChartAxisSnapshot? valueAxis = axes.FirstOrDefault(axis => axis.Type == "value");
+            (decimal minimum, decimal maximum) = RadarScaleCalculator.Resolve(
+                seriesList,
+                valueAxis?.Min,
+                valueAxis?.Max,
+                diagnostics);
+            radarMinimum = minimum;
+            radarMaximum = maximum;
+        }
+
+        ChartDefinitionSnapshot definition = new()
+        {
+            Type = chartType,
+            TypeLabel = typeLabel,
+            Title = title,
+            SupportedForBinding = IsSupportedForBinding(
+                chartType,
+                allSeriesElements,
+                seriesList,
+                categories),
+            RadarMinimum = radarMinimum,
+            RadarMaximum = radarMaximum,
+            WidthEmu = 0,
+            HeightEmu = 0,
+        };
+
         ChartDataTableSnapshot dataTable = ChartDataTableBuilder.Build(
             chartType, seriesList, categories);
 
@@ -182,7 +236,9 @@ internal static class OpenXmlWordChartAnalyzer
             out List<ChartDiagnosticItem> contractDiagnostics);
         diagnostics.AddRange(contractDiagnostics);
 
-        if (!definition.SupportedForBinding && allSeriesElements.Count > 0)
+        if (!definition.SupportedForBinding &&
+            allSeriesElements.Count > 0 &&
+            chartType != "radar")
         {
             diagnostics.Add(new ChartDiagnosticItem
             {
@@ -247,8 +303,11 @@ internal static class OpenXmlWordChartAnalyzer
 
         string axisRole = parentGroup is not null && parentGroup.Order > 0 ? "secondary" : "primary";
 
-        string? catFormula = ReadChildFormula(
-            FindChild(seriesElement, "cat") ?? FindChild(seriesElement, "xVal"), "strRef");
+        string? catFormula = ReadFirstChildFormula(
+            FindChild(seriesElement, "cat") ?? FindChild(seriesElement, "xVal"),
+            "strRef",
+            "numRef",
+            "multiLvlStrRef");
         if (catFormula is not null)
         {
             formulas.Add(new ChartFormulaSnapshot
@@ -278,10 +337,13 @@ internal static class OpenXmlWordChartAnalyzer
 
         string groupType = parentGroup?.Type ?? "unknown";
 
+        int parsedIndex = ParseIntegerChildAttribute(seriesElement, "idx", seriesIndex);
+        int parsedOrder = ParseIntegerChildAttribute(seriesElement, "order", seriesIndex);
+
         return new ChartSeriesSnapshot
         {
             Key = $"series-{seriesIndex}",
-            SeriesIndex = seriesIndex, Order = seriesIndex,
+            SeriesIndex = parsedIndex, Order = parsedOrder,
             Name = name, ChartType = groupType,
             PlotGroupId = parentGroup?.Id ?? "plot-group-0",
             AxisRole = axisRole,
@@ -346,9 +408,27 @@ internal static class OpenXmlWordChartAnalyzer
         OpenXmlElement? multiRef = FindChild(catContainer, "multiLvlStrRef");
         if (multiRef is not null)
         {
+            string? formula = ReadFormula(multiRef);
+            if (formula is not null)
+            {
+                formulas.Add(new ChartFormulaSnapshot
+                {
+                    Role = "Category", SeriesIndex = null,
+                    Formula = formula,
+                    SheetName = ParseSheetName(formula),
+                    RangeAddress = ParseRangeAddress(formula),
+                });
+            }
+
+            OpenXmlElement? multiCache = FindChild(multiRef, "multiLvlStrCache");
+            if (multiCache is null)
+            {
+                return new List<ChartCategorySnapshot>();
+            }
+
             List<ChartCategorySnapshot> multi = new();
             int lastIdx = 0;
-            foreach (OpenXmlElement level in multiRef.ChildElements.Where(e => e.LocalName == "lvl"))
+            foreach (OpenXmlElement level in multiCache.ChildElements.Where(e => e.LocalName == "lvl"))
             {
                 foreach (OpenXmlElement pt in level.ChildElements.Where(e => e.LocalName == "pt"))
                 {
@@ -390,7 +470,17 @@ internal static class OpenXmlWordChartAnalyzer
     private static List<ChartCategorySnapshot> ReadCategoryPointsFromCache(OpenXmlElement cache)
     {
         List<ChartCategorySnapshot> result = new();
-        int maxIdx = 0;
+        int maxIdx = -1;
+        int pointCount = 0;
+        string? pointCountText = GetAttribute(FindChild(cache, "ptCount"), "val");
+        if (pointCountText is not null)
+        {
+            int.TryParse(
+                pointCountText,
+                NumberStyles.Integer,
+                CultureInfo.InvariantCulture,
+                out pointCount);
+        }
         foreach (OpenXmlElement pt in cache.ChildElements.Where(e => e.LocalName == "pt"))
         {
             uint idx = ParseIndex(pt);
@@ -403,7 +493,7 @@ internal static class OpenXmlWordChartAnalyzer
             });
             maxIdx = Math.Max(maxIdx, (int)idx);
         }
-        return FillCategoryGaps(result, maxIdx + 1);
+        return FillCategoryGaps(result, Math.Max(pointCount, maxIdx + 1));
     }
 
     private static IReadOnlyList<ChartDataPointSnapshot> ReadDataPoints(
@@ -597,6 +687,19 @@ internal static class OpenXmlWordChartAnalyzer
         return refEl is null ? null : ReadFormula(refEl);
     }
 
+    private static string? ReadFirstChildFormula(
+        OpenXmlElement? parent,
+        params string[] containerNames)
+    {
+        if (parent is null) return null;
+        foreach (string containerName in containerNames)
+        {
+            string? formula = ReadChildFormula(parent, containerName);
+            if (formula is not null) return formula;
+        }
+        return null;
+    }
+
     private static string? ParseSheetName(string? formula)
     {
         if (string.IsNullOrWhiteSpace(formula)) return null;
@@ -632,14 +735,26 @@ internal static class OpenXmlWordChartAnalyzer
             OpenXmlElement? container = FindChild(seriesElement, tag);
             if (container is null) continue;
 
-            foreach (OpenXmlElement cacheEl in container.ChildElements
-                         .Where(e => e.LocalName is "numCache" or "strCache" or "numRef" or "strRef"))
+            foreach (OpenXmlElement sourceElement in container.ChildElements
+                         .Where(e => e.LocalName is
+                             "numCache" or "strCache" or "numRef" or "strRef" or
+                             "numLit" or "strLit" or "multiLvlStrRef"))
             {
+                OpenXmlElement cacheEl = sourceElement.LocalName switch
+                {
+                    "numRef" => FindChild(sourceElement, "numCache") ?? sourceElement,
+                    "strRef" => FindChild(sourceElement, "strCache") ?? sourceElement,
+                    "multiLvlStrRef" => FindChild(sourceElement, "multiLvlStrCache") ?? sourceElement,
+                    _ => sourceElement,
+                };
                 int ptCount = 0;
                 bool hasSparse = false;
                 int lastIdx = -1;
 
-                foreach (OpenXmlElement pt in cacheEl.ChildElements.Where(e => e.LocalName == "pt"))
+                IEnumerable<OpenXmlElement> points = cacheEl.LocalName == "multiLvlStrCache"
+                    ? Descendants(cacheEl).Where(e => e.LocalName == "pt")
+                    : cacheEl.ChildElements.Where(e => e.LocalName == "pt");
+                foreach (OpenXmlElement pt in points)
                 {
                     uint idx = ParseIndex(pt);
                     if (lastIdx >= 0 && (int)idx != lastIdx + 1) hasSparse = true;
@@ -664,6 +779,18 @@ internal static class OpenXmlWordChartAnalyzer
         return 0;
     }
 
+    private static int ParseIntegerChildAttribute(
+        OpenXmlElement element,
+        string childName,
+        int fallback)
+    {
+        string? raw = GetAttribute(FindChild(element, childName), "val");
+        return raw is not null &&
+               int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out int value)
+            ? value
+            : fallback;
+    }
+
     private static decimal? ParseNumericAttribute(OpenXmlElement? element, string childName)
     {
         if (element is null) return null;
@@ -675,8 +802,139 @@ internal static class OpenXmlWordChartAnalyzer
         return null;
     }
 
-    private static bool IsSupportedForBinding(string chartType) =>
-        chartType is not "unsupported" and not "radar" and not "surface" and not "surface3D";
+    private static bool IsSupportedForBinding(
+        string chartType,
+        IReadOnlyList<OpenXmlElement> seriesElements,
+        IReadOnlyList<ChartSeriesSnapshot> series,
+        IReadOnlyList<ChartCategorySnapshot> categories)
+    {
+        if (chartType is "unsupported" or "surface" or "surface3D")
+        {
+            return false;
+        }
+
+        if (chartType != "radar")
+        {
+            return true;
+        }
+
+        return series.Count > 0 &&
+               categories.Count > 0 &&
+               seriesElements.Count == series.Count &&
+               seriesElements.All(HasWritableCategoryCache) &&
+               seriesElements.All(HasWritableValueCache);
+    }
+
+    private static void AddRadarDiagnostics(
+        IReadOnlyList<OpenXmlElement> seriesElements,
+        IReadOnlyList<ChartSeriesSnapshot> series,
+        IReadOnlyList<ChartCategorySnapshot> categories,
+        ICollection<ChartDiagnosticItem> diagnostics)
+    {
+        if (series.Count == 0)
+        {
+            diagnostics.Add(Diagnostic(
+                "radar_missing_series",
+                "雷达图没有数据系列，无法绑定。"));
+        }
+
+        if (categories.Count == 0)
+        {
+            diagnostics.Add(Diagnostic(
+                "radar_missing_categories",
+                "雷达图没有分类指标，无法绑定。"));
+        }
+
+        for (int index = 0; index < seriesElements.Count; index++)
+        {
+            if (!HasWritableValueCache(seriesElements[index]))
+            {
+                diagnostics.Add(Diagnostic(
+                    "radar_missing_value_cache",
+                    $"雷达图系列 {index + 1} 没有可写数值缓存。",
+                    index));
+            }
+
+            if (!HasWritableCategoryCache(seriesElements[index]))
+            {
+                diagnostics.Add(Diagnostic(
+                    "radar_missing_category_cache",
+                    $"雷达图系列 {index + 1} 没有可写分类缓存。",
+                    index));
+            }
+        }
+
+        foreach (ChartSeriesSnapshot item in series)
+        {
+            if (categories.Count > 0 && item.Values.Count != categories.Count)
+            {
+                diagnostics.Add(Diagnostic(
+                    "radar_series_length_mismatch",
+                    $"雷达图系列 \"{item.Name}\" 的数值数量 {item.Values.Count} 与指标数量 {categories.Count} 不一致。",
+                    item.SeriesIndex));
+            }
+
+            if (item.Values.Any(point => point.IsMissing))
+            {
+                diagnostics.Add(Diagnostic(
+                    "radar_missing_values",
+                    $"雷达图系列 \"{item.Name}\" 包含缺失值；网页预览将使用轴最小值临时绘制，写回仍保留空值。",
+                    item.SeriesIndex));
+            }
+        }
+    }
+
+    private static bool HasWritableCategoryCache(OpenXmlElement seriesElement)
+    {
+        OpenXmlElement? container = FindChild(seriesElement, "cat")
+            ?? FindChild(seriesElement, "xVal");
+        return HasCache(
+            container,
+            ("strRef", "strCache"),
+            ("numRef", "numCache"),
+            ("multiLvlStrRef", "multiLvlStrCache"),
+            ("strLit", "strLit"),
+            ("numLit", "numLit"));
+    }
+
+    private static bool HasWritableValueCache(OpenXmlElement seriesElement)
+    {
+        OpenXmlElement? container = FindChild(seriesElement, "val")
+            ?? FindChild(seriesElement, "yVal");
+        return HasCache(
+            container,
+            ("numRef", "numCache"),
+            ("numLit", "numLit"));
+    }
+
+    private static bool HasCache(
+        OpenXmlElement? container,
+        params (string Source, string Cache)[] shapes)
+    {
+        if (container is null) return false;
+        foreach ((string sourceName, string cacheName) in shapes)
+        {
+            OpenXmlElement? source = FindChild(container, sourceName);
+            if (source is null) continue;
+            if (sourceName == cacheName || FindChild(source, cacheName) is not null)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static ChartDiagnosticItem Diagnostic(
+        string code,
+        string message,
+        int? seriesIndex = null) => new()
+    {
+        Code = code,
+        Level = "warning",
+        Message = message,
+        SeriesIndex = seriesIndex,
+        Recoverable = true,
+    };
 
     private static int CalcCompleteness(
         IReadOnlyList<ChartSeriesSnapshot> series,

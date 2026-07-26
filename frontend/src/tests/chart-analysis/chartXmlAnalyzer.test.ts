@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import JSZip from "jszip";
 import { parseXmlString } from "../../features/docx/ooxml/xmlUtils";
 import { analyzeChartXml } from "../../features/docx/chart-analysis/parsers/chartXmlAnalyzer";
+import { toWordChartModel } from "../../features/docx/chart-analysis/render/toWordChartModel";
+import type { WordRadarChartModel } from "../../features/docx/chart-recognition/types";
 
 const CHART_NS = `xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"`;
 
@@ -206,28 +208,59 @@ describe("analyzeChartXml — pie chart", () => {
   });
 });
 
-describe("analyzeChartXml — unsupported chart types", () => {
-  it("still parses structure for a radar chart (parsing supported, preview unsupported)", async () => {
+describe("analyzeChartXml — radar chart", () => {
+  it("parses marker style, range and produces a previewable radar model", async () => {
     const xml = `<?xml version="1.0"?>
 <c:chartSpace ${CHART_NS}>
   <c:chart>
     <c:title><c:tx><c:rich><a:p><a:r><a:t>雷达图标题</a:t></a:r></a:p></c:rich></c:tx></c:title>
     <c:plotArea>
       <c:radarChart>
+        <c:radarStyle val="marker"/>
         ${simpleSer("能力值", ["速度", "力量", "耐力"], [5, 7, 6])}
+        <c:axId val="1"/><c:axId val="2"/>
       </c:radarChart>
+      <c:catAx><c:axId val="1"/><c:crossAx val="2"/></c:catAx>
+      <c:valAx><c:axId val="2"/><c:scaling><c:min val="0"/><c:max val="10"/></c:scaling><c:crossAx val="1"/></c:valAx>
     </c:plotArea>
   </c:chart>
 </c:chartSpace>`;
     const parsed = await analyzeChartXml(baseInput(xml));
     expect(parsed.type).toBe("radar");
     expect(parsed.supportedForParsing).toBe(true);
-    expect(parsed.supportedForPreview).toBe(false);
+    expect(parsed.supportedForPreview).toBe(true);
+    expect(parsed.supportedForBinding).toBe(true);
+    expect(parsed.plotGroups[0].radarStyle).toBe("marker");
     expect(parsed.title?.plainText).toBe("雷达图标题");
     expect(parsed.series).toHaveLength(1);
     expect(parsed.series[0].values.points.map((p) => p.value)).toEqual([5, 7, 6]);
+
+    const model = toWordChartModel(parsed);
+    expect(model.type).toBe("radar");
+    const radarModel = model as WordRadarChartModel;
+    expect(radarModel.radarStyle).toBe("marker");
+    expect(radarModel.showMarker).toBe(true);
+    expect(radarModel.filled).toBe(false);
+    expect(radarModel.min).toBe(0);
+    expect(radarModel.max).toBe(10);
   });
 
+  it("falls back unknown style to standard and emits a warning", async () => {
+    const xml = `<?xml version="1.0"?>
+<c:chartSpace ${CHART_NS}><c:chart><c:plotArea>
+  <c:radarChart>
+    <c:radarStyle val="custom"/>
+    ${simpleSer("能力值", ["A", "B", "C"], [83, 70, 65])}
+  </c:radarChart>
+</c:plotArea></c:chart></c:chartSpace>`;
+    const parsed = await analyzeChartXml(baseInput(xml));
+    expect(parsed.plotGroups[0].radarStyle).toBe("standard");
+    expect(parsed.diagnostics.items.some((item) => item.code === "radar-unknown-style")).toBe(true);
+  });
+
+});
+
+describe("analyzeChartXml — unsupported chart types", () => {
   it("does not crash and returns a structured fallback when plotArea is missing", async () => {
     const xml = `<?xml version="1.0"?><c:chartSpace ${CHART_NS}><c:chart></c:chart></c:chartSpace>`;
     const parsed = await analyzeChartXml(baseInput(xml));

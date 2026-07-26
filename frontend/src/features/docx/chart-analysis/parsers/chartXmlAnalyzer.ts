@@ -112,6 +112,13 @@ export async function analyzeChartXml(input: ChartAnalysisInput): Promise<Parsed
 
   const dataTable = buildDataTable(chartType, categories, series);
   const bindingSchema = buildBindingSchema(identity, chartType, categories, series);
+  const supportedForBinding = resolveBindingSupport(
+    chartType,
+    categories,
+    series,
+    axes,
+    diagnostics
+  );
 
   const dimensions = {
     widthPx: input.widthPx,
@@ -136,7 +143,7 @@ export async function analyzeChartXml(input: ChartAnalysisInput): Promise<Parsed
     typeLabel,
     supportedForParsing: true,
     supportedForPreview,
-    supportedForBinding: series.length > 0 && series.some((s) => s.values.points.length > 0),
+    supportedForBinding,
     title,
     autoTitleDeleted,
     dimensions,
@@ -204,6 +211,23 @@ function buildPlotGroupsAndSeries(
         : null;
 
     const scatterStyleEl = el.getElementsByTagNameNS(OOXML_NS.c, "scatterStyle")[0];
+    const radarStyleEl = Array.from(el.children).find(
+      (child) => child.namespaceURI === OOXML_NS.c && child.localName === "radarStyle"
+    );
+    const rawRadarStyle = radarStyleEl?.getAttribute("val") ?? null;
+    const radarStyle =
+      resolvedType === "radar"
+        ? rawRadarStyle === "marker" || rawRadarStyle === "filled" || rawRadarStyle === "standard"
+          ? rawRadarStyle
+          : "standard"
+        : null;
+    if (resolvedType === "radar" && rawRadarStyle != null && radarStyle !== rawRadarStyle) {
+      diagnostics.warn(
+        "radar-unknown-style",
+        `未知雷达图样式 "${rawRadarStyle}"，已回退为 standard`,
+        { path: plotGroupId }
+      );
+    }
     const gapWidthEl = el.getElementsByTagNameNS(OOXML_NS.c, "gapWidth")[0];
     const overlapEl = el.getElementsByTagNameNS(OOXML_NS.c, "overlap")[0];
     const varyColorsEl = el.getElementsByTagNameNS(OOXML_NS.c, "varyColors")[0];
@@ -231,6 +255,7 @@ function buildPlotGroupsAndSeries(
       grouping,
       barDirection,
       scatterStyle: scatterStyleEl?.getAttribute("val") ?? null,
+      radarStyle,
       seriesKeys: groupSeries.map((s) => s.key),
       axisIds,
       gapWidth: gapWidthEl ? parseInt(gapWidthEl.getAttribute("val") ?? "", 10) : null,
@@ -241,6 +266,76 @@ function buildPlotGroupsAndSeries(
   });
 
   return { plotGroups, series: allSeries };
+}
+
+function resolveBindingSupport(
+  chartType: WordChartType,
+  categories: ReturnType<typeof parseCategoryContainer>,
+  series: ParsedChartSeries[],
+  axes: ReturnType<typeof parseAllAxes>,
+  diagnostics: ChartDiagnosticsCollector
+): boolean {
+  if (chartType !== "radar") {
+    return series.length > 0 && series.some((item) => item.values.points.length > 0);
+  }
+
+  if (series.length === 0) {
+    diagnostics.warn("radar-missing-series", "雷达图没有数据系列，无法绑定");
+  }
+  if (categories.length === 0) {
+    diagnostics.warn("radar-missing-categories", "雷达图没有分类指标，无法绑定");
+  }
+
+  let cachesWritable = series.length > 0;
+  for (const item of series) {
+    const writable =
+      item.values.sourceKind === "reference" ||
+      item.values.sourceKind === "literal";
+    if (!writable) {
+      cachesWritable = false;
+      diagnostics.warn(
+        "radar-missing-value-cache",
+        `雷达图系列 "${item.name}" 没有可写数值缓存`,
+        { seriesKey: item.key }
+      );
+    }
+
+    if (categories.length > 0 && item.values.points.length !== categories.length) {
+      diagnostics.warn(
+        "radar-series-length-mismatch",
+        `雷达图系列 "${item.name}" 的数值数量 ${item.values.points.length} 与指标数量 ${categories.length} 不一致`,
+        { seriesKey: item.key }
+      );
+    }
+    if (item.values.points.some((point) => point.isMissing)) {
+      diagnostics.warn(
+        "radar-missing-values",
+        `雷达图系列 "${item.name}" 包含缺失值；预览会使用指标最小值临时绘制，原始模型仍保留 null`,
+        { seriesKey: item.key }
+      );
+    }
+  }
+
+  const finiteValues = series
+    .flatMap((item) => item.values.points.map((point) => point.value))
+    .filter((value): value is number => value != null && Number.isFinite(value));
+  if (finiteValues.length === 0) {
+    diagnostics.warn("radar-empty-values", "雷达图没有有效数值，预览将使用安全范围 0–100");
+  }
+
+  const valueAxis = axes.find((axis) => axis.type === "value");
+  if (
+    valueAxis?.min != null &&
+    valueAxis.max != null &&
+    valueAxis.max <= valueAxis.min
+  ) {
+    diagnostics.warn(
+      "radar-invalid-axis-range",
+      `雷达图轴范围无效：最小值 ${valueAxis.min}，最大值 ${valueAxis.max}`
+    );
+  }
+
+  return series.length > 0 && categories.length > 0 && cachesWritable;
 }
 
 /**

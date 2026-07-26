@@ -105,6 +105,10 @@ public sealed record ChartDefinitionSnapshot
 
     public bool SupportedForBinding { get; init; }
 
+    public decimal? RadarMinimum { get; init; }
+
+    public decimal? RadarMaximum { get; init; }
+
     public int WidthEmu { get; init; }
 
     public int HeightEmu { get; init; }
@@ -124,6 +128,8 @@ public sealed record ChartPlotGroupSnapshot
     public string? Grouping { get; init; }
 
     public string? BarDirection { get; init; }
+
+    public string? RadarStyle { get; init; }
 
     public IReadOnlyList<string> SeriesKeys { get; init; } = Array.Empty<string>();
 

@@ -91,18 +91,18 @@ public sealed class WordReportRenderer : IWordReportRenderer
                             NormalizedChartData normData = ChartDataBindingResolver.Resolve(
                                 chartValue, binding.ChartMapping, chartItem.DataDefinition);
 
-                            // Write to embedded workbook first
-                            try
+                            // A declared embedded workbook is part of the write contract:
+                            // failures must not be silently downgraded to cache-only.
+                            if (string.Equals(
+                                    chartItem.DataDefinition.WriteCapability,
+                                    "workbook-and-cache",
+                                    StringComparison.Ordinal))
                             {
                                 EmbeddedChartWorkbookWriter.Write(
                                     mainPart.ChartParts.First(p =>
                                         string.Equals(p.Uri.OriginalString, chartItem.Locator.PartKey, StringComparison.Ordinal)),
                                     normData,
                                     chartItem.DataDefinition);
-                            }
-                            catch (InvalidOperationException)
-                            {
-                                // No embedded workbook; that's OK, just write to cache
                             }
 
                             // Write to Chart XML caches + update formulas

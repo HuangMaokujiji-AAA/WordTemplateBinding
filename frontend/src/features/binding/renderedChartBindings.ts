@@ -62,7 +62,7 @@ export function decorateRenderedCharts(
         return;
       }
       if (!chart.isBindable) {
-        callbacks.onError("该图表没有可写的数据系列缓存。");
+        callbacks.onError(getUnbindableReason(chart));
         return;
       }
       callbacks.onBind(chart.locatorId, field);
@@ -92,7 +92,7 @@ export function refreshChartBindingTargetStates(
       ? `图表已绑定：${chart.boundDataPath}；拖入其他集合字段可直接改绑`
       : chart?.isBindable
         ? `图表：${chart.title}（可拖入集合字段）`
-        : `图表：${chart?.title ?? "未命名"}（没有可写数据缓存）`;
+        : `图表：${chart?.title ?? "未命名"}（${chart ? getUnbindableReason(chart) : "结构不完整"}）`;
   }
 }
 
@@ -132,4 +132,15 @@ function readField(dataTransfer: DataTransfer | null): DataFieldNode | null {
   } catch {
     return null;
   }
+}
+
+function getUnbindableReason(chart: ChartItem): string {
+  const diagnostics = chart.dataDefinition?.diagnostics
+    .filter((item) =>
+      item.code.startsWith("radar_") ||
+      item.code === "chart_not_bindable"
+    )
+    .map((item) => item.message)
+    .filter(Boolean);
+  return diagnostics?.[0] ?? "该图表没有可写的数据系列缓存。";
 }

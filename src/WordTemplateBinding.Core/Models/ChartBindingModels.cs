@@ -63,9 +63,13 @@ public sealed record ChartSeriesDefinition
 
     public string? NameFormula { get; init; }
 
+    public string? NameSheetName { get; init; }
+
     public string? NameCell { get; init; }
 
     public string? ValueFormula { get; init; }
+
+    public string? ValueSheetName { get; init; }
 
     public string? ValueStartCell { get; init; }
 

@@ -36,23 +36,16 @@ internal static class EmbeddedChartWorkbookWriter
         WorkbookPart workbookPart = spreadsheet.WorkbookPart
             ?? throw new InvalidOperationException("嵌入工作簿缺少 WorkbookPart。");
 
-        // Use the first worksheet or find by sheet name from formula
-        Sheet? sheet = workbookPart.Workbook?.Sheets?.Elements<Sheet>().FirstOrDefault()
-            ?? throw new InvalidOperationException("嵌入工作簿没有工作表。");
+        HashSet<WorksheetPart> touchedWorksheets = new();
+        WorksheetContext categorySheet = ResolveWorksheet(
+            workbookPart,
+            definition.Category.SheetName);
+        touchedWorksheets.Add(categorySheet.Part);
 
-        string sheetId = sheet.Id?.Value ?? string.Empty;
-        WorksheetPart? worksheetPart = workbookPart.GetPartById(sheetId) as WorksheetPart
-            ?? throw new InvalidOperationException("找不到工作表部件。");
-
-        SheetData sheetData = worksheetPart.Worksheet.GetFirstChild<SheetData>()
-            ?? throw new InvalidOperationException("工作表没有数据。");
-
-        string sheetName = sheet.Name?.Value ?? "Sheet1";
-
-        // Write category column
-        WriteColumn(
-            sheetData,
-            sheetName,
+        // Write category range (Word commonly stores radar data horizontally).
+        WriteRange(
+            categorySheet.Data,
+            categorySheet.Name,
             definition.Category.StartCell,
             definition.Category.EndCell,
             data.Categories.Select(c => c ?? string.Empty).ToList());
@@ -66,16 +59,29 @@ internal static class EmbeddedChartWorkbookWriter
             // Series name
             if (seriesDef.NameCell is not null)
             {
-                WriteCellValue(sheetData, sheetName, seriesDef.NameCell, normSeries.Name, CellValues.String);
+                WorksheetContext nameSheet = ResolveWorksheet(
+                    workbookPart,
+                    seriesDef.NameSheetName ?? seriesDef.ValueSheetName ?? definition.Category.SheetName);
+                touchedWorksheets.Add(nameSheet.Part);
+                WriteCellValue(
+                    nameSheet.Data,
+                    nameSheet.Name,
+                    seriesDef.NameCell,
+                    normSeries.Name,
+                    CellValues.String);
             }
 
             // Series values
             var strValues = normSeries.Values
                 .Select(v => v?.ToString(CultureInfo.InvariantCulture) ?? string.Empty)
                 .ToList();
-            WriteColumn(
-                sheetData,
-                sheetName,
+            WorksheetContext valueSheet = ResolveWorksheet(
+                workbookPart,
+                seriesDef.ValueSheetName ?? definition.Category.SheetName);
+            touchedWorksheets.Add(valueSheet.Part);
+            WriteRange(
+                valueSheet.Data,
+                valueSheet.Name,
                 seriesDef.ValueStartCell,
                 seriesDef.ValueEndCell,
                 strValues);
@@ -88,11 +94,54 @@ internal static class EmbeddedChartWorkbookWriter
             calcChain.RemoveAllChildren();
         }
 
-        worksheetPart.Worksheet.Save();
+        foreach (WorksheetPart worksheetPart in touchedWorksheets)
+            worksheetPart.Worksheet.Save();
         workbookPart.Workbook?.Save();
     }
 
-    private static void WriteColumn(
+    private static WorksheetContext ResolveWorksheet(
+        WorkbookPart workbookPart,
+        string? requestedSheetName)
+    {
+        List<Sheet> sheets = workbookPart.Workbook?.Sheets?.Elements<Sheet>().ToList()
+            ?? new List<Sheet>();
+        if (sheets.Count == 0)
+            throw new InvalidOperationException("嵌入工作簿没有工作表。");
+
+        string? normalized = NormalizeSheetName(requestedSheetName);
+        Sheet? sheet = normalized is null
+            ? sheets[0]
+            : sheets.FirstOrDefault(candidate => string.Equals(
+                candidate.Name?.Value,
+                normalized,
+                StringComparison.OrdinalIgnoreCase));
+        if (sheet is null)
+            throw new InvalidOperationException($"嵌入工作簿中找不到工作表 \"{normalized}\"。");
+
+        string sheetId = sheet.Id?.Value
+            ?? throw new InvalidOperationException($"工作表 \"{sheet.Name?.Value}\" 缺少关系标识。");
+        WorksheetPart part = workbookPart.GetPartById(sheetId) as WorksheetPart
+            ?? throw new InvalidOperationException($"找不到工作表 \"{sheet.Name?.Value}\" 的部件。");
+        SheetData data = part.Worksheet.GetFirstChild<SheetData>()
+            ?? throw new InvalidOperationException($"工作表 \"{sheet.Name?.Value}\" 没有数据。");
+
+        return new WorksheetContext(sheet.Name?.Value ?? "Sheet1", part, data);
+    }
+
+    private static string? NormalizeSheetName(string? sheetName)
+    {
+        if (string.IsNullOrWhiteSpace(sheetName)) return null;
+        string normalized = sheetName.Trim().Trim('\'');
+        if (normalized.StartsWith("[", StringComparison.Ordinal))
+        {
+            int bracket = normalized.IndexOf(']');
+            if (bracket >= 0 && bracket < normalized.Length - 1)
+                normalized = normalized[(bracket + 1)..];
+        }
+        return normalized;
+    }
+
+    private static void WriteRange(
         SheetData sheetData,
         string sheetName,
         string? startCell,
@@ -101,16 +150,23 @@ internal static class EmbeddedChartWorkbookWriter
     {
         if (string.IsNullOrWhiteSpace(startCell)) return;
 
-        (string col, int startRow) = ParseCellReference(startCell);
-        int originalEndRow = startRow + (endCell is not null
-            ? ParseCellReference(endCell).row - startRow
-            : values.Count - 1);
-        int oldRowCount = Math.Max(0, originalEndRow - startRow + 1);
+        (string startColumn, int startRow) = ParseCellReference(startCell);
+        (string endColumn, int endRow) = endCell is not null
+            ? ParseCellReference(endCell)
+            : (startColumn, startRow + Math.Max(0, values.Count - 1));
+        int startColumnNumber = ToColumnNumber(startColumn);
+        int endColumnNumber = ToColumnNumber(endColumn);
+        bool horizontal = startRow == endRow && startColumnNumber != endColumnNumber;
+        int oldCount = horizontal
+            ? Math.Max(1, endColumnNumber - startColumnNumber + 1)
+            : Math.Max(1, endRow - startRow + 1);
 
         // Write new values
         for (int i = 0; i < values.Count; i++)
         {
-            string cellRef = $"{col}{startRow + i}";
+            string cellRef = horizontal
+                ? $"{ToColumnName(startColumnNumber + i)}{startRow}"
+                : $"{startColumn}{startRow + i}";
             string value = values[i];
             WriteCellValue(sheetData, sheetName, cellRef, value,
                 decimal.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out _)
@@ -118,11 +174,13 @@ internal static class EmbeddedChartWorkbookWriter
         }
 
         // Clear old cells beyond new data
-        if (values.Count < oldRowCount)
+        if (values.Count < oldCount)
         {
-            for (int i = values.Count; i < oldRowCount; i++)
+            for (int i = values.Count; i < oldCount; i++)
             {
-                string cellRef = $"{col}{startRow + i}";
+                string cellRef = horizontal
+                    ? $"{ToColumnName(startColumnNumber + i)}{startRow}"
+                    : $"{startColumn}{startRow + i}";
                 WriteCellValue(sheetData, sheetName, cellRef, string.Empty, CellValues.String);
             }
         }
@@ -189,8 +247,34 @@ internal static class EmbeddedChartWorkbookWriter
         if (b is null) return 1;
         var (ca, ra) = ParseCellReference(a);
         var (cb, rb) = ParseCellReference(b);
-        int colCmp = string.Compare(ca, cb, StringComparison.Ordinal);
+        int colCmp = ToColumnNumber(ca).CompareTo(ToColumnNumber(cb));
         if (colCmp != 0) return colCmp;
         return ra.CompareTo(rb);
     }
+
+    private static int ToColumnNumber(string column)
+    {
+        int result = 0;
+        foreach (char character in column.ToUpperInvariant())
+            result = checked(result * 26 + character - 'A' + 1);
+        return result;
+    }
+
+    private static string ToColumnName(int number)
+    {
+        if (number <= 0) throw new ArgumentOutOfRangeException(nameof(number));
+        string result = string.Empty;
+        while (number > 0)
+        {
+            number--;
+            result = (char)('A' + number % 26) + result;
+            number /= 26;
+        }
+        return result;
+    }
+
+    private sealed record WorksheetContext(
+        string Name,
+        WorksheetPart Part,
+        SheetData Data);
 }

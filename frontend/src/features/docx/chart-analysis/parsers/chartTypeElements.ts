@@ -25,7 +25,7 @@ export const CHART_TYPE_ELEMENTS: Record<string, ChartTypeElementInfo> = {
   area3DChart: { type: "area", previewable: false },
   scatterChart: { type: "scatter", previewable: true },
   bubbleChart: { type: "bubble", previewable: false },
-  radarChart: { type: "radar", previewable: false },
+  radarChart: { type: "radar", previewable: true },
   stockChart: { type: "stock", previewable: false },
   surfaceChart: { type: "surface", previewable: false },
   surface3DChart: { type: "surface", previewable: false },

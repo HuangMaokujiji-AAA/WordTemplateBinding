@@ -103,8 +103,10 @@ export interface ChartSeriesDef {
   seriesKey: string;
   name: string;
   nameFormula: string | null;
+  nameSheetName: string | null;
   nameCell: string | null;
   valueFormula: string | null;
+  valueSheetName: string | null;
   valueStartCell: string | null;
   valueEndCell: string | null;
   values: Array<number | null>;
@@ -175,6 +177,8 @@ export interface ChartDefinitionSnapshot {
   typeLabel: string;
   title: string | null;
   supportedForBinding: boolean;
+  radarMinimum: number | null;
+  radarMaximum: number | null;
   widthEmu: number;
   heightEmu: number;
 }
@@ -185,6 +189,7 @@ export interface ChartPlotGroupSnapshot {
   type: string;
   grouping: string | null;
   barDirection: string | null;
+  radarStyle: string | null;
   seriesKeys: string[];
   axisIds: string[];
 }

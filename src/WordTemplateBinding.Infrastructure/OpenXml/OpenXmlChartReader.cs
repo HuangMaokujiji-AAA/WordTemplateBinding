@@ -165,7 +165,18 @@ internal static class OpenXmlChartReader
             // Best-effort
         }
 
-        return tempItem with { DataDefinition = dataDef };
+        bool structurallyBindable =
+            analysis?.Chart.SupportedForBinding ??
+            (series.Count > 0 && series.All(item => item.Values.Count > 0));
+        bool hasWriteCapability =
+            dataDef is not null &&
+            !string.Equals(dataDef.WriteCapability, "unsupported", StringComparison.Ordinal);
+
+        return tempItem with
+        {
+            DataDefinition = dataDef,
+            IsBindable = structurallyBindable && hasWriteCapability,
+        };
     }
 
     private static string ReadSeriesName(OpenXmlElement series, int seriesIndex)

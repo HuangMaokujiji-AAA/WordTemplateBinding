@@ -135,30 +135,74 @@ internal static class OpenXmlChartWriter
 
     private static string UpdateFormulaRange(string formula, int newRowCount)
     {
-        // Parse formula like "Sheet1!$A$2:$A$3" or "'Chart Data'!$B$2:$B$5"
         int bang = formula.IndexOf('!');
         if (bang < 0) return formula;
         string prefix = formula[..(bang + 1)];
         string range = formula[(bang + 1)..];
-
-        // Parse range
         var parts = range.Split(':');
-        if (parts.Length != 2) return formula; // Single cell, leave unchanged
+        if (parts.Length is < 1 or > 2 ||
+            !TryParseCellReference(parts[0], out string startColumn, out int startRow))
+        {
+            return formula;
+        }
 
-        string startCell = parts[0].TrimStart('$');
-        string endCol = parts[1].Replace("$", "").TrimEnd('0', '1', '2', '3', '4', '5', '6', '7', '8', '9');
-
-        // Extract column from start
-        string startCol = new string(startCell.TakeWhile(c => !char.IsDigit(c)).ToArray());
-        string startRowStr = new string(startCell.SkipWhile(c => !char.IsDigit(c)).ToArray());
-
-        if (!int.TryParse(startRowStr, NumberStyles.Integer, CultureInfo.InvariantCulture, out int startRow))
+        string endCellText = parts.Length == 2 ? parts[1] : parts[0];
+        if (!TryParseCellReference(endCellText, out string endColumn, out int endRow))
             return formula;
 
-        int newEndRow = startRow + newRowCount - 1;
-        string newRange = $"${startCol}${startRow}:${endCol}{newEndRow}";
+        bool horizontal = startRow == endRow &&
+                          !string.Equals(startColumn, endColumn, StringComparison.OrdinalIgnoreCase);
+        string newEndColumn = horizontal
+            ? ToColumnName(ToColumnNumber(startColumn) + newRowCount - 1)
+            : startColumn;
+        int newEndRow = horizontal ? startRow : startRow + newRowCount - 1;
+        string newRange =
+            $"${startColumn.ToUpperInvariant()}${startRow}:${newEndColumn}${newEndRow}";
 
         return prefix + newRange;
+    }
+
+    private static bool TryParseCellReference(
+        string text,
+        out string column,
+        out int row)
+    {
+        Match match = Regex.Match(text, @"^\$?([A-Za-z]+)\$?(\d+)$");
+        if (match.Success &&
+            int.TryParse(
+                match.Groups[2].Value,
+                NumberStyles.Integer,
+                CultureInfo.InvariantCulture,
+                out row))
+        {
+            column = match.Groups[1].Value;
+            return true;
+        }
+
+        column = string.Empty;
+        row = 0;
+        return false;
+    }
+
+    private static int ToColumnNumber(string column)
+    {
+        int result = 0;
+        foreach (char character in column.ToUpperInvariant())
+            result = checked(result * 26 + character - 'A' + 1);
+        return result;
+    }
+
+    private static string ToColumnName(int number)
+    {
+        if (number <= 0) throw new ArgumentOutOfRangeException(nameof(number));
+        string result = string.Empty;
+        while (number > 0)
+        {
+            number--;
+            result = (char)('A' + number % 26) + result;
+            number /= 26;
+        }
+        return result;
     }
 
     private static IReadOnlyList<OpenXmlElement> FindSeries(ChartSpace chartSpace)
@@ -184,6 +228,13 @@ internal static class OpenXmlChartWriter
 
     private static void UpdateStringCacheValue(OpenXmlElement container, string value)
     {
+        OpenXmlElement? directValue = FindChild(container, "v");
+        if (directValue is not null)
+        {
+            directValue.InsertAfterSelf(new NumericValue(value));
+            directValue.Remove();
+        }
+
         foreach (OpenXmlElement child in container.ChildElements.Where(
                      e => e.LocalName is "strRef" or "strLit"))
         {
@@ -205,9 +256,7 @@ internal static class OpenXmlChartWriter
                 cache.Append(newPt);
 
             // Update ptCount
-            OpenXmlElement? ptCount = cache.ChildElements.FirstOrDefault(e => e.LocalName == "ptCount");
-            if (ptCount is not null)
-                ptCount.SetAttribute(new OpenXmlAttribute("val", string.Empty, "1"));
+            EnsurePointCount(cache, 1);
         }
     }
 
@@ -260,14 +309,7 @@ internal static class OpenXmlChartWriter
             pt.Remove();
 
         // Update ptCount
-        OpenXmlElement? ptCount = cache.ChildElements.FirstOrDefault(e => e.LocalName == "ptCount");
-        if (ptCount is not null)
-            ptCount.SetAttribute(new OpenXmlAttribute("val", string.Empty, categories.Count.ToString(CultureInfo.InvariantCulture)));
-        else
-        {
-            ptCount = new PointCount { Val = (uint)categories.Count };
-            cache.InsertAt(ptCount, 0);
-        }
+        EnsurePointCount(cache, categories.Count);
 
         // Add new points
         OpenXmlElement? extLst = cache.ChildElements.FirstOrDefault(e => e.LocalName == "extLst");
@@ -289,9 +331,7 @@ internal static class OpenXmlChartWriter
             lvl.Remove();
 
         // Update ptCount
-        OpenXmlElement? ptCount = cache.ChildElements.FirstOrDefault(e => e.LocalName == "ptCount");
-        if (ptCount is not null)
-            ptCount.SetAttribute(new OpenXmlAttribute("val", string.Empty, categories.Count.ToString(CultureInfo.InvariantCulture)));
+        EnsurePointCount(cache, categories.Count);
 
         Level level = new();
         for (int i = 0; i < categories.Count; i++)
@@ -308,9 +348,7 @@ internal static class OpenXmlChartWriter
         foreach (OpenXmlElement pt in cache.ChildElements.Where(e => e.LocalName == "pt").ToList())
             pt.Remove();
 
-        OpenXmlElement? ptCount = cache.ChildElements.FirstOrDefault(e => e.LocalName == "ptCount");
-        if (ptCount is not null)
-            ptCount.SetAttribute(new OpenXmlAttribute("val", string.Empty, categories.Count.ToString(CultureInfo.InvariantCulture)));
+        EnsurePointCount(cache, categories.Count);
 
         OpenXmlElement? extLst = cache.ChildElements.FirstOrDefault(e => e.LocalName == "extLst");
         for (int i = 0; i < categories.Count; i++)
@@ -356,9 +394,7 @@ internal static class OpenXmlChartWriter
         foreach (OpenXmlElement pt in cache.ChildElements.Where(e => e.LocalName == "pt").ToList())
             pt.Remove();
 
-        OpenXmlElement? ptCount = cache.ChildElements.FirstOrDefault(e => e.LocalName == "ptCount");
-        if (ptCount is not null)
-            ptCount.SetAttribute(new OpenXmlAttribute("val", string.Empty, values.Count.ToString(CultureInfo.InvariantCulture)));
+        EnsurePointCount(cache, values.Count);
 
         OpenXmlElement? extLst = cache.ChildElements.FirstOrDefault(e => e.LocalName == "extLst");
         for (int i = 0; i < values.Count; i++)
@@ -374,6 +410,28 @@ internal static class OpenXmlChartWriter
 
     private static OpenXmlElement? FindChild(OpenXmlElement element, string localName) =>
         element.ChildElements.FirstOrDefault(e => e.LocalName == localName);
+
+    private static void EnsurePointCount(OpenXmlElement cache, int count)
+    {
+        OpenXmlElement? pointCount = cache.ChildElements
+            .FirstOrDefault(element => element.LocalName == "ptCount");
+        if (pointCount is not null)
+        {
+            pointCount.SetAttribute(new OpenXmlAttribute(
+                "val",
+                string.Empty,
+                count.ToString(CultureInfo.InvariantCulture)));
+            return;
+        }
+
+        PointCount created = new() { Val = (uint)count };
+        OpenXmlElement? formatCode = cache.ChildElements
+            .FirstOrDefault(element => element.LocalName == "formatCode");
+        if (formatCode is not null)
+            cache.InsertAfter(created, formatCode);
+        else
+            cache.InsertAt(created, 0);
+    }
 
     private static IEnumerable<OpenXmlElement> Descendants(OpenXmlElement element)
     {

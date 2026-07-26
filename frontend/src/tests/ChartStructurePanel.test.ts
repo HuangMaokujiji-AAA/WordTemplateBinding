@@ -124,4 +124,35 @@ describe("ChartStructurePanel", () => {
     const container = mountPanel(makeWorkspaceItem());
     expect(container.textContent).toContain("未绑定");
   });
+
+  it("shows radar style, range, workbook and binding status", () => {
+    const parsed = makeParsedChart({
+      type: "radar",
+      typeLabel: "雷达图",
+      plotGroups: [{
+        id: "pg0", order: 0, type: "radar", grouping: null,
+        barDirection: null, scatterStyle: null, radarStyle: "filled",
+        seriesKeys: ["pg0-s0"], axisIds: ["1", "2"],
+        gapWidth: null, overlap: null, varyColors: null, holeSizePercent: null,
+      }],
+      axes: [{
+        id: "2", type: "value", role: "y", position: "left", title: null,
+        min: -20, max: 100, majorUnit: 20, minorUnit: null,
+        logarithmicBase: null, reversed: false, visible: true,
+        numberFormat: null, sourceLinked: null, crosses: null, crossesAt: null,
+        crossAxisId: "1", labelPosition: null, tickLabelPosition: null,
+        majorTickMark: null, minorTickMark: null, delete: false,
+      }],
+    });
+    const container = mountPanel(makeWorkspaceItem({
+      parsed,
+      canBind: true,
+    }));
+    expect(container.textContent).toContain("雷达图");
+    expect(container.textContent).toContain("填充");
+    expect(container.textContent).toContain("-20");
+    expect(container.textContent).toContain("100");
+    expect(container.textContent).toContain("可绑定");
+    expect(container.textContent).toContain("嵌入工作簿");
+  });
 });
