@@ -176,6 +176,29 @@ public static class WorkspaceEndpoints
                     result.Refreshed,
                 });
             });
+
+        // Bulk import tables whose names match a prefix as data sources.
+        // Designed for the scevl2024 setup; the request shape stays generic so
+        // the endpoint can be reused for other schemas.
+        projects.MapPost("/{projectId:regex(^[0-9]+$)}/data-sources/bulk-import",
+            async (
+                string projectId,
+                BulkImportScevl2024Request request,
+                DataSourceWorkspaceService service,
+                CancellationToken cancellationToken) =>
+            {
+                Core.Models.DataSourceBulkImportResult result =
+                    await service.BulkImportAsync(
+                        DatabaseIdParser.Required(projectId, nameof(projectId)),
+                        DatabaseIdParser.Required(
+                            request.ConnectionId,
+                            nameof(request.ConnectionId)),
+                        request.SchemaName,
+                        request.ObjectNamePrefix,
+                        request.SourceCodePrefix,
+                        cancellationToken);
+                return Results.Ok(PersistentApiMapper.BulkImport(result));
+            });
     }
 
     // Chapter management under /api/chapters
@@ -241,7 +264,7 @@ public static class WorkspaceEndpoints
                     request.ConnectionName,
                     request.ConnectionType,
                     request.Config,
-                    request.CredentialRef,
+                    request.CredentialRef ?? string.Empty,
                     cancellationToken))));
         connections.MapPost("/{connectionId}/test", async (
             string connectionId,

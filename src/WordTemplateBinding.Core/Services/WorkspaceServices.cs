@@ -444,20 +444,37 @@ public sealed class DataConnectionService
                 "本阶段只支持 MYSQL 数据连接。");
         }
 
+        bool hasInlineCredentials = !string.IsNullOrWhiteSpace(config.Username) ||
+                                     !string.IsNullOrWhiteSpace(config.Password);
+        bool hasCredentialRef = !string.IsNullOrWhiteSpace(credentialRef);
+
+        if (!hasInlineCredentials && !hasCredentialRef)
+        {
+            throw new WorkspaceException(
+                "invalid_data_connection",
+                "数据连接必须提供 Config 中的 Username/Password，或通过 CredentialRef 引用服务端配置。");
+        }
+
+        if (hasCredentialRef &&
+            (!credentialRef.StartsWith(
+                "config:DataSourceCredentials:",
+                StringComparison.OrdinalIgnoreCase) ||
+             credentialRef.Length > 255))
+        {
+            throw new WorkspaceException(
+                "invalid_data_connection",
+                "凭据引用格式应为 config:DataSourceCredentials:<key>（不超过 255 字符）。");
+        }
+
         if (string.IsNullOrWhiteSpace(name) ||
             name.Length > 255 ||
             string.IsNullOrWhiteSpace(config.Host) ||
             string.IsNullOrWhiteSpace(config.Database) ||
-            string.IsNullOrWhiteSpace(credentialRef) ||
-            credentialRef.Length > 255 ||
-            !credentialRef.StartsWith(
-                "config:DataSourceCredentials:",
-                StringComparison.OrdinalIgnoreCase) ||
             config.Port == 0)
         {
             throw new WorkspaceException(
                 "invalid_data_connection",
-                "数据连接名称、主机、端口、数据库和凭据引用均不能为空。");
+                "数据连接名称、主机、端口、数据库不能为空。");
         }
 
         return await _connections.CreateAsync(
@@ -708,6 +725,110 @@ public sealed class DataSourceWorkspaceService
             },
             ParseActor(),
             cancellationToken);
+    }
+
+    /// <summary>
+    /// 批量导入指定连接下、匹配对象名前缀的表或视图作为数据源。
+    /// 失败不中断；返回每条结果的成功/失败/跳过状态。
+    /// </summary>
+    public async Task<DataSourceBulkImportResult> BulkImportAsync(
+        ulong projectId,
+        ulong connectionId,
+        string schema,
+        string objectNamePrefix,
+        string sourceCodePrefix,
+        CancellationToken cancellationToken)
+    {
+        if (await _projects.GetAsync(projectId, cancellationToken) is null)
+        {
+            throw new WorkspaceException("project_not_found", $"找不到项目：{projectId}。");
+        }
+
+        DataConnectionRecord connection = await _connections.GetAsync(
+                connectionId, cancellationToken)
+            ?? throw new WorkspaceException(
+                "data_connection_not_found",
+                $"找不到数据连接：{connectionId}。");
+        if (connection.ProjectId.HasValue && connection.ProjectId != projectId)
+        {
+            throw new WorkspaceException(
+                "cross_project_binding_forbidden",
+                "数据连接不属于当前项目。");
+        }
+
+        IReadOnlyList<DatabaseObjectInfo> objects =
+            await _introspector.ListObjectsAsync(connection, schema, cancellationToken);
+        IReadOnlyList<DataSourceRecord> existing =
+            await _sources.ListAsync(projectId, cancellationToken);
+        HashSet<string> existingNames = existing
+            .Select(item => item.ObjectName)
+            .ToHashSet(StringComparer.Ordinal);
+
+        List<DataSourceBulkImportItem> results = new();
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        ulong? actor = ParseActor();
+        foreach (DatabaseObjectInfo item in objects)
+        {
+            if (!item.ObjectName.StartsWith(objectNamePrefix, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (existingNames.Contains(item.ObjectName))
+            {
+                results.Add(new DataSourceBulkImportItem(
+                    item.ObjectName,
+                    "SKIPPED",
+                    $"已存在同名数据源，跳过创建。",
+                    null));
+                continue;
+            }
+
+            string sourceCode = $"{sourceCodePrefix}_{item.ObjectName}".Substring(
+                0,
+                Math.Min($"{sourceCodePrefix}_{item.ObjectName}".Length, 64));
+            try
+            {
+                DataSourceRecord created = await _sources.CreateAsync(
+                    new DataSourceRecord
+                    {
+                        Id = 0,
+                        ProjectId = projectId,
+                        ConnectionId = connectionId,
+                        SourceCode = sourceCode,
+                        SourceName = item.ObjectName,
+                        SourceType = "DATABASE",
+                        SourceStatus = "ACTIVE",
+                        SchemaName = schema,
+                        ObjectType = item.ObjectType,
+                        ObjectName = item.ObjectName,
+                        SchemaJson = null,
+                        CreatedAt = now,
+                    },
+                    actor,
+                    cancellationToken);
+                results.Add(new DataSourceBulkImportItem(
+                    item.ObjectName,
+                    "CREATED",
+                    null,
+                    created.Id.ToString()));
+            }
+            catch (Exception exception)
+            {
+                results.Add(new DataSourceBulkImportItem(
+                    item.ObjectName,
+                    "FAILED",
+                    exception.Message,
+                    null));
+            }
+        }
+
+        return new DataSourceBulkImportResult(
+            objectNamePrefix,
+            results.Count(item => item.Status == "CREATED"),
+            results.Count(item => item.Status == "SKIPPED"),
+            results.Count(item => item.Status == "FAILED"),
+            results.AsReadOnly());
     }
 
     public async Task<DataSnapshotRecord> RefreshAsync(

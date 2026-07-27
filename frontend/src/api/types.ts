@@ -460,6 +460,13 @@ export interface DataSourceRecord {
   schemaName: string;
   objectType: string;
   objectName: string;
+  schema?: {
+    schemaName: string;
+    objectType: string;
+    objectName: string;
+    columns: DatabaseColumnInfo[];
+  } | null;
+  createdAt?: string;
 }
 
 export interface DataFieldRecord {
@@ -474,6 +481,101 @@ export interface DataFieldRecord {
   isBindable: boolean;
   sampleValue: unknown;
   displayOrder: number;
+}
+
+export interface DataConnectionConfig {
+  host: string;
+  port: number;
+  database: string;
+  sslMode: string;
+  username?: string | null;
+  password?: string | null;
+}
+
+export interface DataConnectionRecord {
+  id: string;
+  projectId: string | null;
+  connectionName: string;
+  connectionType: string;
+  config: DataConnectionConfig;
+  credentialRef: string;
+  connectionStatus: string;
+  lastTestedAt: string | null;
+  lastTestResult: { success: boolean; message: string } | null;
+  createdAt: string;
+}
+
+export interface DatabaseObjectInfo {
+  schema: string;
+  objectName: string;
+  objectType: "TABLE" | "VIEW";
+}
+
+export interface DatabaseColumnInfo {
+  schema: string;
+  objectName: string;
+  columnName: string;
+  databaseType: string;
+  isNullable: boolean;
+  isPrimaryKey: boolean;
+  comment: string | null;
+  dataType: DataValueType;
+  isBindable: boolean;
+  ordinal: number;
+}
+
+export interface DataSnapshotRecord {
+  id: string;
+  dataSourceId: string;
+  snapshotNo: number;
+  snapshotStatus: "READY" | "CAPTURING" | string;
+  content: unknown;
+  schema: unknown;
+  contentHash: string | null;
+  rowCount: number | null;
+  capturedAt: string;
+  errorMessage: string | null;
+}
+
+export interface CreateDataConnectionInput {
+  projectId: string | null;
+  connectionName: string;
+  connectionType: "MYSQL";
+  config: DataConnectionConfig;
+  credentialRef?: string | null;
+}
+
+export interface CreateDataSourceInput {
+  projectId: string;
+  connectionId: string;
+  sourceCode: string;
+  sourceName: string;
+  sourceType: "DATABASE";
+  schemaName: string;
+  objectType: "TABLE" | "VIEW";
+  objectName: string;
+}
+
+export interface BulkImportScevl2024Input {
+  connectionId: string;
+  schemaName?: string;
+  objectNamePrefix?: string;
+  sourceCodePrefix?: string;
+}
+
+export interface BulkImportItemResult {
+  objectName: string;
+  status: "CREATED" | "SKIPPED" | "FAILED" | string;
+  message: string | null;
+  dataSourceId: string | null;
+}
+
+export interface BulkImportScevl2024Result {
+  objectNamePrefix: string;
+  created: number;
+  skipped: number;
+  failed: number;
+  items: BulkImportItemResult[];
 }
 
 export interface BindingSetRecord {

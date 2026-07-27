@@ -1,11 +1,19 @@
 import type {
   BindingItemRecord,
   BindingSetRecord,
+  BulkImportScevl2024Input,
+  BulkImportScevl2024Result,
   ChapterRecord,
+  CreateDataConnectionInput,
+  CreateDataSourceInput,
+  DataConnectionRecord,
   DataFieldRecord,
   DataFieldNode,
   DataSchemaResponse,
+  DataSnapshotRecord,
   DataSourceRecord,
+  DatabaseColumnInfo,
+  DatabaseObjectInfo,
   ProjectRecord,
   TemplateElementRecord,
   TemplateRecord,
@@ -510,12 +518,103 @@ export function listDataSources(projectId: string): Promise<DataSourceRecord[]> 
   return requestJson<DataSourceRecord[]>(url);
 }
 
+export function listConnections(
+  projectId: string
+): Promise<DataConnectionRecord[]> {
+  const url = new URL("/api/data-connections", window.location.origin);
+  url.searchParams.set("projectId", projectId);
+  return requestJson<DataConnectionRecord[]>(url);
+}
+
+export function getConnection(
+  connectionId: string
+): Promise<DataConnectionRecord> {
+  return requestJson<DataConnectionRecord>(
+    `/api/data-connections/${encodeURIComponent(connectionId)}`
+  );
+}
+
+export function createConnection(
+  input: CreateDataConnectionInput
+): Promise<DataConnectionRecord> {
+  return requestJson<DataConnectionRecord>("/api/data-connections", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export function testConnection(
+  connectionId: string
+): Promise<{ success: boolean; message: string }> {
+  return requestJson<{ success: boolean; message: string }>(
+    `/api/data-connections/${encodeURIComponent(connectionId)}/test`,
+    { method: "POST" }
+  );
+}
+
+export function listSchemas(connectionId: string): Promise<string[]> {
+  return requestJson<string[]>(
+    `/api/data-connections/${encodeURIComponent(connectionId)}/schemas`
+  );
+}
+
+export function listObjects(
+  connectionId: string,
+  schema: string
+): Promise<DatabaseObjectInfo[]> {
+  const url = new URL(
+    `/api/data-connections/${encodeURIComponent(connectionId)}/objects`,
+    window.location.origin
+  );
+  url.searchParams.set("schema", schema);
+  return requestJson<DatabaseObjectInfo[]>(url);
+}
+
+export function listColumns(
+  connectionId: string,
+  schema: string,
+  objectName: string
+): Promise<DatabaseColumnInfo[]> {
+  const url = new URL(
+    `/api/data-connections/${encodeURIComponent(connectionId)}/columns`,
+    window.location.origin
+  );
+  url.searchParams.set("schema", schema);
+  url.searchParams.set("objectName", objectName);
+  return requestJson<DatabaseColumnInfo[]>(url);
+}
+
+export function createDataSource(
+  input: CreateDataSourceInput
+): Promise<DataSourceRecord> {
+  return requestJson<DataSourceRecord>("/api/data-sources", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
 export function refreshDataSource(
   dataSourceId: string
-): Promise<{ id: string; snapshotStatus: string }> {
-  return requestJson<{ id: string; snapshotStatus: string }>(
+): Promise<DataSnapshotRecord> {
+  return requestJson<DataSnapshotRecord>(
     `/api/data-sources/${encodeURIComponent(dataSourceId)}/refresh`,
     { method: "POST" }
+  );
+}
+
+export function bulkImportScevl2024(
+  projectId: string,
+  input: BulkImportScevl2024Input
+): Promise<BulkImportScevl2024Result> {
+  return requestJson<BulkImportScevl2024Result>(
+    `/api/projects/${encodeURIComponent(projectId)}/data-sources/bulk-import`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    }
   );
 }
 

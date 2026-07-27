@@ -41,7 +41,7 @@ internal sealed record CreateDataConnectionRequest(
     string ConnectionName,
     string ConnectionType,
     DataConnectionConfig Config,
-    string CredentialRef);
+    string? CredentialRef);
 
 internal sealed record CreateDataSourceRequest(
     string ProjectId,
@@ -52,6 +52,12 @@ internal sealed record CreateDataSourceRequest(
     string SchemaName,
     string ObjectType,
     string ObjectName);
+
+internal sealed record BulkImportScevl2024Request(
+    string ConnectionId,
+    string SchemaName = "scevl2024",
+    string ObjectNamePrefix = "data_专业监测_",
+    string SourceCodePrefix = "scevl2024_");
 
 internal sealed record CreateBindingSetRequest(
     string ChapterId,
@@ -215,6 +221,21 @@ internal static class PersistentApiMapper
         value.IsBindable,
         sampleValue = ParseJson(value.SampleValueJson),
         value.DisplayOrder,
+    };
+
+    internal static object BulkImport(DataSourceBulkImportResult value) => new
+    {
+        objectNamePrefix = value.ObjectNamePrefix,
+        value.Created,
+        value.Skipped,
+        value.Failed,
+        items = value.Items.Select(item => new
+        {
+            item.ObjectName,
+            item.Status,
+            item.Message,
+            dataSourceId = item.DataSourceId,
+        }),
     };
 
     internal static object BindingSet(BindingSetRecord value) => new

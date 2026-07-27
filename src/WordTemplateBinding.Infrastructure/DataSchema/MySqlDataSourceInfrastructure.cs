@@ -81,15 +81,24 @@ public sealed class MySqlDataSourceConnectionFactory : IDataSourceConnectionFact
                 $"当前只支持 MYSQL 数据连接，不支持 {connection.ConnectionType}。");
         }
 
-        if (string.IsNullOrWhiteSpace(connection.CredentialRef))
+        // 优先读取 Config 中内置的 Username/Password，否则通过凭证引用解析
+        string? username = connection.Config.Username;
+        string? password = connection.Config.Password;
+        if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
         {
-            throw new WorkspaceException(
-                "data_connection_unavailable",
-                "数据连接没有配置服务端凭据引用。");
+            if (string.IsNullOrWhiteSpace(connection.CredentialRef))
+            {
+                throw new WorkspaceException(
+                    "data_connection_unavailable",
+                    "数据连接没有配置凭据。请在 Config 中提供 Username/Password，或通过 CredentialRef 引用服务端配置。");
+            }
+
+            DataConnectionCredential credential =
+                _credentials.Resolve(connection.CredentialRef);
+            username = credential.Username;
+            password = credential.Password;
         }
 
-        DataConnectionCredential credential =
-            _credentials.Resolve(connection.CredentialRef);
         if (!Enum.TryParse(
                 connection.Config.SslMode,
                 ignoreCase: true,
@@ -105,8 +114,8 @@ public sealed class MySqlDataSourceConnectionFactory : IDataSourceConnectionFact
             Server = connection.Config.Host,
             Port = connection.Config.Port,
             Database = connection.Config.Database,
-            UserID = credential.Username,
-            Password = credential.Password,
+            UserID = username,
+            Password = password,
             SslMode = sslMode,
             Pooling = true,
             PersistSecurityInfo = false,
@@ -287,7 +296,7 @@ public sealed class MySqlSchemaIntrospector : IDatabaseSchemaIntrospector
         string selectList = string.Join(
             ", ",
             readable.Select(column => QuoteIdentifier(column.ColumnName)));
-        string sql = $"SELECT {selectList} FROM {QuoteIdentifier(schema)}.{QuoteIdentifier(objectName)} LIMIT @limit;";
+        string sql = $"SELECT {selectList} FROM {QuoteIdentifier(schema)}.{QuoteIdentifier(objectName)} ORDER BY 1 LIMIT @limit;";
         await using DbConnection dbConnection =
             await _connections.OpenAsync(connection, cancellationToken);
         await using DbCommand command = dbConnection.CreateCommand();

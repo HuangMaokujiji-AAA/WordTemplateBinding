@@ -208,7 +208,12 @@ public sealed record DataConnectionConfig(
     string Host,
     uint Port,
     string Database,
-    string SslMode);
+    string SslMode)
+{
+    /// <summary>内联凭据：非空时优先于此连接方式。</summary>
+    public string? Username { get; init; }
+    public string? Password { get; init; }
+}
 
 public sealed record DataConnectionCredential(string Username, string Password);
 
@@ -260,6 +265,19 @@ public sealed record DataSourceRecord
     public string? SchemaJson { get; init; }
     public required DateTimeOffset CreatedAt { get; init; }
 }
+
+public sealed record DataSourceBulkImportItem(
+    string ObjectName,
+    string Status,
+    string? Message,
+    string? DataSourceId);
+
+public sealed record DataSourceBulkImportResult(
+    string ObjectNamePrefix,
+    int Created,
+    int Skipped,
+    int Failed,
+    IReadOnlyList<DataSourceBulkImportItem> Items);
 
 public sealed record DataSnapshotRecord
 {

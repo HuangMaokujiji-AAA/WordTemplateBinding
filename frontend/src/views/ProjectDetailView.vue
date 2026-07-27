@@ -12,8 +12,25 @@ import {
   deleteChapter,
   reorderChapters,
   initializeDevDataSource,
+  listConnections,
+  createConnection,
+  testConnection,
+  listSchemas,
+  listObjects,
+  listColumns,
+  listDataSources,
+  createDataSource,
+  refreshDataSource,
+  bulkImportScevl2024,
 } from "../api/client";
-import type { ProjectRecord, ChapterRecord } from "../api/types";
+import type {
+  ProjectRecord,
+  ChapterRecord,
+  DataConnectionRecord,
+  DatabaseObjectInfo,
+  DataSourceRecord,
+  BulkImportScevl2024Result,
+} from "../api/types";
 
 const route = useRoute();
 const router = useRouter();
@@ -322,6 +339,335 @@ async function handleInitializeDataSource(forceRefresh = false) {
   }
 }
 
+/* ── connections ─────────────────────────── */
+
+const connections = ref<DataConnectionRecord[]>([]);
+const connectionsLoading = ref(false);
+
+const showConnectionDialog = ref(false);
+const connectionForm = ref({
+  connectionName: "",
+  connectionType: "MYSQL" as "MYSQL",
+  host: "",
+  port: 3306,
+  database: "scevl2024",
+  sslMode: "Preferred",
+  username: "",
+  password: "",
+  credentialRef: "",
+});
+const connectionSaving = ref(false);
+const connectionError = ref("");
+
+const showTestResult = ref<{
+  connectionId: string;
+  success: boolean;
+  message: string;
+} | null>(null);
+
+async function fetchConnections() {
+  connectionsLoading.value = true;
+  try {
+    connections.value = await listConnections(projectId.value);
+  } catch (e: any) {
+    error.value = e.message ?? "加载数据连接失败";
+  } finally {
+    connectionsLoading.value = false;
+  }
+}
+
+function openConnectionDialog() {
+  connectionForm.value = {
+    connectionName: "",
+    connectionType: "MYSQL",
+    host: "",
+    port: 3306,
+    database: "scevl2024",
+    sslMode: "Preferred",
+    username: "",
+    password: "",
+    credentialRef: "",
+  };
+  connectionError.value = "";
+  showConnectionDialog.value = true;
+}
+
+async function handleCreateConnection() {
+  const f = connectionForm.value;
+  if (!f.connectionName.trim() || !f.host.trim() || !f.database.trim()) {
+    connectionError.value = "名称、主机、数据库为必填项";
+    return;
+  }
+  const hasInlineCreds = Boolean(f.username || f.password);
+  const hasCredRef = Boolean(f.credentialRef.trim());
+  if (!hasInlineCreds && !hasCredRef) {
+    connectionError.value = "请填写用户名/密码，或填写凭据引用（credentialRef）。";
+    return;
+  }
+  if (hasCredRef && !f.credentialRef.startsWith("config:DataSourceCredentials:")) {
+    connectionError.value = "凭据引用必须以 config:DataSourceCredentials: 开头";
+    return;
+  }
+  connectionSaving.value = true;
+  connectionError.value = "";
+  try {
+    const created = await createConnection({
+      projectId: projectId.value,
+      connectionName: f.connectionName.trim(),
+      connectionType: "MYSQL",
+      config: {
+        host: f.host.trim(),
+        port: Number(f.port) || 3306,
+        database: f.database.trim(),
+        sslMode: f.sslMode,
+        username: f.username.trim() || null,
+        password: f.password.trim() || null,
+      },
+      credentialRef: f.credentialRef.trim() || null,
+    });
+    await fetchConnections();
+    showConnectionDialog.value = false;
+    // 自动测试，缩短闭环
+    showTestResult.value = {
+      connectionId: created.id,
+      success: false,
+      message: "正在测试连接…",
+    };
+    try {
+      const result = await testConnection(created.id);
+      showTestResult.value = {
+        connectionId: created.id,
+        success: result.success,
+        message: result.message,
+      };
+    } catch (e: any) {
+      showTestResult.value = {
+        connectionId: created.id,
+        success: false,
+        message: e.message ?? "测试连接失败",
+      };
+    }
+  } catch (e: any) {
+    connectionError.value = e.message ?? "创建数据连接失败";
+  } finally {
+    connectionSaving.value = false;
+  }
+}
+
+async function handleTestConnection(connectionId: string) {
+  showTestResult.value = {
+    connectionId,
+    success: false,
+    message: "正在测试连接…",
+  };
+  try {
+    const result = await testConnection(connectionId);
+    showTestResult.value = {
+      connectionId,
+      success: result.success,
+      message: result.message,
+    };
+  } catch (e: any) {
+    showTestResult.value = {
+      connectionId,
+      success: false,
+      message: e.message ?? "测试连接失败",
+    };
+  }
+}
+
+function lastTestResult(connectionId: string) {
+  if (showTestResult.value && showTestResult.value.connectionId === connectionId) {
+    return showTestResult.value;
+  }
+  const conn = connections.value.find((c) => c.id === connectionId);
+  if (!conn?.lastTestResult) return null;
+  return {
+    connectionId,
+    success: conn.lastTestResult.success,
+    message: conn.lastTestResult.message,
+  };
+}
+
+/* ── data sources (production) ───────────── */
+
+const dataSources = ref<DataSourceRecord[]>([]);
+const dataSourcesLoading = ref(false);
+const refreshingSourceId = ref<string | null>(null);
+
+const showSourceDialog = ref(false);
+const sourceForm = ref({
+  connectionId: "",
+  sourceCode: "",
+  sourceName: "",
+  schemaName: "scevl2024",
+  objectType: "TABLE" as "TABLE" | "VIEW",
+  objectName: "",
+});
+const availableSchemas = ref<string[]>([]);
+const availableObjects = ref<DatabaseObjectInfo[]>([]);
+const sourceSaving = ref(false);
+const sourceError = ref("");
+
+async function fetchDataSources() {
+  dataSourcesLoading.value = true;
+  try {
+    dataSources.value = await listDataSources(projectId.value);
+  } catch (e: any) {
+    error.value = e.message ?? "加载数据源失败";
+  } finally {
+    dataSourcesLoading.value = false;
+  }
+}
+
+async function handleRefreshSource(source: DataSourceRecord) {
+  refreshingSourceId.value = source.id;
+  try {
+    await refreshDataSource(source.id);
+    await fetchDataSources();
+  } catch (e: any) {
+    error.value = e.message ?? `刷新数据源 ${source.sourceName} 失败`;
+  } finally {
+    refreshingSourceId.value = null;
+  }
+}
+
+async function openSourceDialog() {
+  if (connections.value.length === 0) {
+    error.value = "请先创建至少一个数据连接。";
+    return;
+  }
+  sourceForm.value = {
+    connectionId: connections.value[0]?.id ?? "",
+    sourceCode: "",
+    sourceName: "",
+    schemaName: "scevl2024",
+    objectType: "TABLE",
+    objectName: "",
+  };
+  sourceError.value = "";
+  availableSchemas.value = [];
+  availableObjects.value = [];
+  showSourceDialog.value = true;
+  await loadSchemas();
+}
+
+async function loadSchemas() {
+  if (!sourceForm.value.connectionId) return;
+  sourceError.value = "";
+  try {
+    availableSchemas.value = await listSchemas(sourceForm.value.connectionId);
+    if (
+      !sourceForm.value.schemaName &&
+      availableSchemas.value.includes("scevl2024")
+    ) {
+      sourceForm.value.schemaName = "scevl2024";
+    }
+    await loadObjects();
+  } catch (e: any) {
+    sourceError.value = e.message ?? "加载数据库 Schema 失败";
+  }
+}
+
+async function loadObjects() {
+  if (!sourceForm.value.connectionId || !sourceForm.value.schemaName) return;
+  sourceError.value = "";
+  try {
+    availableObjects.value = await listObjects(
+      sourceForm.value.connectionId,
+      sourceForm.value.schemaName
+    );
+  } catch (e: any) {
+    sourceError.value = e.message ?? "加载数据表失败";
+  }
+}
+
+function autoFillSourceCode() {
+  if (sourceForm.value.objectName && !sourceForm.value.sourceCode) {
+    const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    sourceForm.value.sourceCode = `${sourceForm.value.schemaName}_${sourceForm.value.objectName}_${stamp}`;
+  }
+  if (sourceForm.value.objectName && !sourceForm.value.sourceName) {
+    sourceForm.value.sourceName = sourceForm.value.objectName;
+  }
+}
+
+async function handleCreateSource() {
+  const f = sourceForm.value;
+  if (!f.connectionId || !f.sourceCode.trim() || !f.objectName.trim()) {
+    sourceError.value = "编码、表名必填";
+    return;
+  }
+  sourceSaving.value = true;
+  sourceError.value = "";
+  try {
+    const created = await createDataSource({
+      projectId: projectId.value,
+      connectionId: f.connectionId,
+      sourceCode: f.sourceCode.trim(),
+      sourceName: f.sourceName.trim() || f.objectName.trim(),
+      sourceType: "DATABASE",
+      schemaName: f.schemaName.trim(),
+      objectType: f.objectType,
+      objectName: f.objectName.trim(),
+    });
+    showSourceDialog.value = false;
+    await fetchDataSources();
+    // 创建后立即刷新一次快照，把字段树跑出来
+    await handleRefreshSource(created);
+  } catch (e: any) {
+    sourceError.value = e.message ?? "创建数据源失败";
+  } finally {
+    sourceSaving.value = false;
+  }
+}
+
+/* ── bulk import scevl2024 ────────────────── */
+
+const bulkImporting = ref(false);
+const bulkImportResult = ref<BulkImportScevl2024Result | null>(null);
+const bulkImportConnectionId = ref("");
+
+async function handleBulkImport() {
+  if (connections.value.length === 0) {
+    error.value = "请先创建至少一个数据连接。";
+    return;
+  }
+  const connectionId =
+    bulkImportConnectionId.value || connections.value[0].id;
+  if (!window.confirm(
+    `将自动在所选连接对应的业务库中扫描 ${"data_专业监测_"} 开头的表并批量创建为数据源。是否继续？`
+  )) {
+    return;
+  }
+  bulkImporting.value = true;
+  bulkImportResult.value = null;
+  try {
+    bulkImportResult.value = await bulkImportScevl2024(projectId.value, {
+      connectionId,
+      schemaName: "scevl2024",
+      objectNamePrefix: "data_专业监测_",
+      sourceCodePrefix: "scevl2024",
+    });
+    await fetchDataSources();
+    // 创建成功后批量触发首次刷新快照
+    for (const item of bulkImportResult.value.items) {
+      if (item.status === "CREATED" && item.dataSourceId) {
+        try {
+          await refreshDataSource(item.dataSourceId);
+        } catch {
+          // 忽略单个失败，让 UI 列表显示实际状态
+        }
+      }
+    }
+    await fetchDataSources();
+  } catch (e: any) {
+    error.value = e.message ?? "批量导入失败";
+  } finally {
+    bulkImporting.value = false;
+  }
+}
+
 /* ── lifecycle ───────────────────────────── */
 
 onMounted(async () => {
@@ -329,6 +675,8 @@ onMounted(async () => {
   if (!error.value) {
     await fetchChapters();
   }
+  await fetchConnections();
+  await fetchDataSources();
 });
 </script>
 
@@ -523,6 +871,210 @@ onMounted(async () => {
         </div>
       </div>
 
+      <!-- connections card -->
+      <div class="card">
+        <div class="card-header">
+          <h2>数据连接</h2>
+          <div class="card-header-actions">
+            <button
+              class="btn btn-sm"
+              :disabled="connectionsLoading"
+              @click="fetchConnections"
+            >
+              {{ connectionsLoading ? "刷新中&hellip;" : "刷新列表" }}
+            </button>
+            <button class="btn btn-sm btn-primary" @click="openConnectionDialog">
+              新建连接
+            </button>
+          </div>
+        </div>
+        <div class="card-body card-body-nopad">
+          <div
+            v-if="!connectionsLoading && connections.length === 0"
+            class="empty-hint pad"
+          >
+            暂无数据连接。点击「新建连接」配置业务库的 host/port/数据库/账号密码。
+          </div>
+          <table v-else class="data-table">
+            <thead>
+              <tr>
+                <th>名称</th>
+                <th>类型</th>
+                <th>主机</th>
+                <th>端口</th>
+                <th>数据库</th>
+                <th>凭据引用</th>
+                <th>最近测试</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="conn in connections" :key="conn.id">
+                <td class="cell-title">{{ conn.connectionName }}</td>
+                <td>{{ conn.connectionType }}</td>
+                <td class="cell-code">{{ conn.config.host }}</td>
+                <td>{{ conn.config.port }}</td>
+                <td>{{ conn.config.database }}</td>
+                <td class="cell-code" :title="conn.credentialRef">
+                  {{ conn.credentialRef }}
+                </td>
+                <td>
+                  <span
+                    v-if="lastTestResult(conn.id)"
+                    class="status-tag"
+                    :style="{
+                      background: (lastTestResult(conn.id)?.success ? '#22c55e' : '#ef4444') + '18',
+                      color: lastTestResult(conn.id)?.success ? '#22c55e' : '#ef4444',
+                      borderColor: (lastTestResult(conn.id)?.success ? '#22c55e' : '#ef4444') + '30',
+                    }"
+                  >
+                    {{ lastTestResult(conn.id)?.success ? "通过" : "失败" }}
+                  </span>
+                  <span v-else class="empty-hint">未测试</span>
+                </td>
+                <td>
+                  <div class="actions-cell">
+                    <button class="btn btn-sm" @click="handleTestConnection(conn.id)">
+                      测试
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- data sources (production) card -->
+      <div class="card">
+        <div class="card-header">
+          <h2>数据源</h2>
+          <div class="card-header-actions">
+            <select
+              v-model="bulkImportConnectionId"
+              :disabled="connections.length === 0 || bulkImporting"
+              class="bulk-import-connection"
+            >
+              <option value="">默认连接</option>
+              <option
+                v-for="conn in connections"
+                :key="conn.id"
+                :value="conn.id"
+              >
+                {{ conn.connectionName }}
+              </option>
+            </select>
+            <button
+              class="btn btn-sm"
+              :disabled="connections.length === 0 || bulkImporting"
+              @click="handleBulkImport"
+            >
+              {{ bulkImporting ? "导入中&hellip;" : "导入 scevl2024 9 张表" }}
+            </button>
+            <button
+              class="btn btn-sm"
+              :disabled="dataSourcesLoading"
+              @click="fetchDataSources"
+            >
+              {{ dataSourcesLoading ? "刷新中&hellip;" : "刷新列表" }}
+            </button>
+            <button class="btn btn-sm btn-primary" @click="openSourceDialog">
+              新建数据源
+            </button>
+          </div>
+        </div>
+        <div class="card-body card-body-nopad">
+          <div
+            v-if="bulkImportResult"
+            class="info-banner"
+          >
+            <strong>批量导入完成：</strong>
+            创建 {{ bulkImportResult.created }} 个，跳过 {{ bulkImportResult.skipped }} 个，失败 {{ bulkImportResult.failed }} 个。
+            <details v-if="bulkImportResult.items.length">
+              <summary>查看明细</summary>
+              <ul class="info-list">
+                <li v-for="item in bulkImportResult.items" :key="item.objectName">
+                  <code>{{ item.objectName }}</code>
+                  —
+                  <span
+                    :class="{
+                      'status-ok': item.status === 'CREATED',
+                      'status-skip': item.status === 'SKIPPED',
+                      'status-fail': item.status === 'FAILED',
+                    }"
+                  >
+                    {{ item.status }}
+                  </span>
+                  <span v-if="item.message">：{{ item.message }}</span>
+                </li>
+              </ul>
+            </details>
+          </div>
+          <div
+            v-if="!dataSourcesLoading && dataSources.length === 0 && !bulkImportResult"
+            class="empty-hint pad"
+          >
+            暂无数据源。请先在上方创建数据连接，再点击「新建数据源」选择连接、数据库、数据表；或点击「导入 scevl2024 9 张表」一键导入。
+          </div>
+          <table v-else class="data-table">
+            <thead>
+              <tr>
+                <th>编码</th>
+                <th>名称</th>
+                <th>连接</th>
+                <th>数据库</th>
+                <th>对象</th>
+                <th>类型</th>
+                <th>状态</th>
+                <th>列数</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="source in dataSources" :key="source.id">
+                <td class="cell-code">{{ source.sourceCode }}</td>
+                <td class="cell-title">{{ source.sourceName }}</td>
+                <td class="cell-code">
+                  {{
+                    connections.find((c) => c.id === source.connectionId)
+                      ?.connectionName || source.connectionId
+                  }}
+                </td>
+                <td>{{ source.schemaName }}</td>
+                <td class="cell-code">{{ source.objectName }}</td>
+                <td>{{ source.objectType }}</td>
+                <td>
+                  <span
+                    class="status-tag"
+                    :style="{
+                      background: (source.sourceStatus === 'READY' ? '#22c55e' : '#94a3b8') + '18',
+                      color: source.sourceStatus === 'READY' ? '#22c55e' : '#94a3b8',
+                      borderColor: (source.sourceStatus === 'READY' ? '#22c55e' : '#94a3b8') + '30',
+                    }"
+                  >
+                    {{ source.sourceStatus }}
+                  </span>
+                </td>
+                <td>{{ source.schema?.columns.length ?? 0 }}</td>
+                <td>
+                  <div class="actions-cell">
+                    <button
+                      class="btn btn-sm"
+                      :disabled="refreshingSourceId === source.id"
+                      @click="handleRefreshSource(source)"
+                    >
+                      {{
+                        refreshingSourceId === source.id ? "刷新中&hellip;" : "刷新快照"
+                      }}
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       <!-- chapters card -->
       <div class="card">
         <div class="card-header">
@@ -704,6 +1256,210 @@ onMounted(async () => {
             @click="handleEditChapter"
           >
             {{ dialogSaving ? "保存中&hellip;" : "确认保存" }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- new connection dialog -->
+    <div
+      v-if="showConnectionDialog"
+      class="dialog-overlay"
+      @click.self="showConnectionDialog = false"
+    >
+      <div class="dialog dialog-wide">
+        <div class="dialog-header">
+          <h2>新建数据连接</h2>
+          <button class="dialog-close" @click="showConnectionDialog = false">&times;</button>
+        </div>
+        <div class="dialog-body">
+          <div v-if="connectionError" class="error-banner dialog-error">
+            {{ connectionError }}
+          </div>
+          <p class="dialog-hint">
+            直接填写数据库账号密码即可。如需引用服务端配置（例如在部署环境隐藏密码），可选填下方的「凭据引用」（使用 <code>config:DataSourceCredentials:&lt;key&gt;</code> 格式）。
+          </p>
+          <div class="form-grid">
+            <div class="form-group">
+              <label>连接名称 <span class="required">*</span></label>
+              <input
+                v-model="connectionForm.connectionName"
+                type="text"
+                placeholder="例如 scevl2024"
+              />
+            </div>
+            <div class="form-group">
+              <label>类型</label>
+              <input
+                v-model="connectionForm.connectionType"
+                type="text"
+                disabled
+              />
+            </div>
+            <div class="form-group">
+              <label>主机 <span class="required">*</span></label>
+              <input
+                v-model="connectionForm.host"
+                type="text"
+                placeholder="127.0.0.1"
+              />
+            </div>
+            <div class="form-group">
+              <label>端口</label>
+              <input v-model.number="connectionForm.port" type="number" min="1" max="65535" />
+            </div>
+            <div class="form-group">
+              <label>数据库 <span class="required">*</span></label>
+              <input
+                v-model="connectionForm.database"
+                type="text"
+                placeholder="scevl2024"
+              />
+            </div>
+            <div class="form-group">
+              <label>TLS</label>
+              <select v-model="connectionForm.sslMode">
+                <option value="Preferred">Preferred</option>
+                <option value="Required">Required</option>
+                <option value="None">None</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>用户名 <span class="required">*</span></label>
+              <input
+                v-model="connectionForm.username"
+                type="text"
+                placeholder="report_app"
+              />
+            </div>
+            <div class="form-group">
+              <label>密码 <span class="required">*</span></label>
+              <input
+                v-model="connectionForm.password"
+                type="password"
+                placeholder="数据库密码"
+              />
+            </div>
+            <div class="form-group form-grid-wide">
+              <label>凭据引用（可选）</label>
+              <input
+                v-model="connectionForm.credentialRef"
+                type="text"
+                placeholder="留空则使用上方的用户名/密码"
+              />
+            </div>
+          </div>
+        </div>
+        <div class="dialog-footer">
+          <button class="btn" @click="showConnectionDialog = false">取消</button>
+          <button
+            class="btn btn-primary"
+            :disabled="connectionSaving"
+            @click="handleCreateConnection"
+          >
+            {{ connectionSaving ? "创建中&hellip;" : "创建并测试" }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- new data source dialog -->
+    <div
+      v-if="showSourceDialog"
+      class="dialog-overlay"
+      @click.self="showSourceDialog = false"
+    >
+      <div class="dialog dialog-wide">
+        <div class="dialog-header">
+          <h2>新建数据源</h2>
+          <button class="dialog-close" @click="showSourceDialog = false">&times;</button>
+        </div>
+        <div class="dialog-body">
+          <div v-if="sourceError" class="error-banner dialog-error">
+            {{ sourceError }}
+          </div>
+          <div class="form-grid">
+            <div class="form-group">
+              <label>数据连接 <span class="required">*</span></label>
+              <select
+                v-model="sourceForm.connectionId"
+                @change="loadSchemas"
+              >
+                <option value="">选择连接</option>
+                <option
+                  v-for="conn in connections"
+                  :key="conn.id"
+                  :value="conn.id"
+                >
+                  {{ conn.connectionName }} ({{ conn.config.host }}:{{ conn.config.port }}/{{ conn.config.database }})
+                </option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>数据库 Schema <span class="required">*</span></label>
+              <select
+                v-model="sourceForm.schemaName"
+                @change="loadObjects"
+              >
+                <option value="">选择 Schema</option>
+                <option
+                  v-for="schema in availableSchemas"
+                  :key="schema"
+                  :value="schema"
+                >
+                  {{ schema }}
+                </option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>对象类型</label>
+              <select v-model="sourceForm.objectType">
+                <option value="TABLE">表</option>
+                <option value="VIEW">视图</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>对象（数据表/视图） <span class="required">*</span></label>
+              <select
+                v-model="sourceForm.objectName"
+                @change="autoFillSourceCode"
+              >
+                <option value="">选择对象</option>
+                <option
+                  v-for="obj in availableObjects.filter((o) => o.objectType === sourceForm.objectType)"
+                  :key="obj.schema + '.' + obj.objectName"
+                  :value="obj.objectName"
+                >
+                  {{ obj.objectName }}
+                </option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>数据源编码 <span class="required">*</span></label>
+              <input
+                v-model="sourceForm.sourceCode"
+                type="text"
+                placeholder="例如 scevl2024_data_专业监测_优势特色专业_20260726"
+              />
+            </div>
+            <div class="form-group">
+              <label>数据源名称</label>
+              <input
+                v-model="sourceForm.sourceName"
+                type="text"
+                placeholder="保持空将使用对象名"
+              />
+            </div>
+          </div>
+        </div>
+        <div class="dialog-footer">
+          <button class="btn" @click="showSourceDialog = false">取消</button>
+          <button
+            class="btn btn-primary"
+            :disabled="sourceSaving || !sourceForm.connectionId || !sourceForm.objectName"
+            @click="handleCreateSource"
+          >
+            {{ sourceSaving ? "创建并刷新中&hellip;" : "创建并刷新快照" }}
           </button>
         </div>
       </div>
@@ -1137,5 +1893,91 @@ onMounted(async () => {
   gap: 8px;
   padding: 16px 24px;
   border-top: 1px solid #f1f5f9;
+}
+
+.dialog-wide {
+  width: 640px;
+}
+
+.dialog-hint {
+  font-size: 12px;
+  color: #64748b;
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  line-height: 1.6;
+}
+
+.dialog-hint code {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  background: #e2e8f0;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 11px;
+  color: #1e293b;
+}
+
+.form-grid-wide {
+  grid-column: 1 / -1;
+}
+
+/* ── bulk import banner ────────────────────── */
+
+.info-banner {
+  margin: 16px 24px 0;
+  padding: 12px 16px;
+  background: #f0f9ff;
+  border: 1px solid #bae6fd;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #0c4a6e;
+}
+
+.info-banner details {
+  margin-top: 8px;
+}
+
+.info-banner summary {
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.info-list {
+  margin: 8px 0 0;
+  padding: 0 0 0 18px;
+  font-size: 12px;
+  color: #334155;
+}
+
+.info-list li {
+  margin: 2px 0;
+}
+
+.status-ok {
+  color: #16a34a;
+  font-weight: 500;
+}
+
+.status-skip {
+  color: #64748b;
+  font-weight: 500;
+}
+
+.status-fail {
+  color: #ef4444;
+  font-weight: 500;
+}
+
+.bulk-import-connection {
+  padding: 4px 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #fff;
+  font-size: 12px;
+  color: #1e293b;
+  cursor: pointer;
+  max-width: 180px;
 }
 </style>

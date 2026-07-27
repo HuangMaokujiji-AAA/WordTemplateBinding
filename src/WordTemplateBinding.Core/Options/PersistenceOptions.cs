@@ -31,7 +31,7 @@ public sealed class DataSourceOptions
     public const string SectionName = "DataSources";
 
     [Range(1, 20)]
-    public int SampleRowLimit { get; set; } = 20;
+    public int SampleRowLimit { get; set; } = 1;
 
     [Range(32, 4096)]
     public int SampleValueMaxLength { get; set; } = 512;
