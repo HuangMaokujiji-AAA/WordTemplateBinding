@@ -540,17 +540,18 @@ public sealed class MySqlTemplateElementRepository : ITemplateElementRepository
 
         const string insertSql = """
             INSERT INTO rp_template_element
-                (template_version_id, element_key, element_type, locator_type, display_name,
+                (template_version_id, segment_id, element_key, element_type, locator_type, display_name,
                  locator_json, binding_schema_json, default_value_json, is_required,
-                 sort_no, parse_status, parse_message)
+                 sort_no, segment_local_order, parse_status, parse_message)
             VALUES
-                (@versionId, @key, @type, @locatorType, @name, CAST(@locator AS JSON),
+                (@versionId, @segmentId, @key, @type, @locatorType, @name, CAST(@locator AS JSON),
                  CAST(@schema AS JSON), CAST(@defaultValue AS JSON), @required,
-                 @sort, @status, @message);
+                 @sort, @segmentLocalOrder, @status, @message);
             """;
         const string updateSql = """
             UPDATE rp_template_element
             SET element_key = @key,
+                segment_id = @segmentId,
                 element_type = @type,
                 locator_type = @locatorType,
                 display_name = @name,
@@ -559,6 +560,7 @@ public sealed class MySqlTemplateElementRepository : ITemplateElementRepository
                 default_value_json = CAST(@defaultValue AS JSON),
                 is_required = @required,
                 sort_no = @sort,
+                segment_local_order = @segmentLocalOrder,
                 parse_status = @status,
                 parse_message = @message
             WHERE id = @id AND template_version_id = @versionId;
@@ -573,6 +575,7 @@ public sealed class MySqlTemplateElementRepository : ITemplateElementRepository
                 transaction);
             command.AddParameter("@versionId", templateVersionId);
             command.AddParameter("@key", element.ElementKey);
+            command.AddParameter("@segmentId", element.SegmentId);
             command.AddParameter("@type", element.ElementType);
             command.AddParameter("@locatorType", element.LocatorType);
             command.AddParameter("@name", element.DisplayName);
@@ -581,6 +584,7 @@ public sealed class MySqlTemplateElementRepository : ITemplateElementRepository
             command.AddParameter("@defaultValue", element.DefaultValueJson ?? "null");
             command.AddParameter("@required", element.IsRequired);
             command.AddParameter("@sort", element.SortNo);
+            command.AddParameter("@segmentLocalOrder", element.SegmentLocalOrder);
             command.AddParameter("@status", element.ParseStatus);
             command.AddParameter("@message", element.ParseMessage);
             if (isUpdate)
@@ -616,9 +620,9 @@ public sealed class MySqlTemplateElementRepository : ITemplateElementRepository
         CancellationToken cancellationToken)
     {
         const string sql = """
-            SELECT id, template_version_id, element_key, element_type, locator_type,
+            SELECT id, template_version_id, segment_id, element_key, element_type, locator_type,
                    display_name, locator_json, binding_schema_json, default_value_json,
-                   is_required, sort_no, parse_status, parse_message
+                   is_required, sort_no, segment_local_order, parse_status, parse_message
             FROM rp_template_element
             WHERE template_version_id = @versionId
               AND UPPER(parse_status) <> 'STALE'
@@ -643,9 +647,9 @@ public sealed class MySqlTemplateElementRepository : ITemplateElementRepository
         CancellationToken cancellationToken)
     {
         const string sql = """
-            SELECT id, template_version_id, element_key, element_type, locator_type,
+            SELECT id, template_version_id, segment_id, element_key, element_type, locator_type,
                    display_name, locator_json, binding_schema_json, default_value_json,
-                   is_required, sort_no, parse_status, parse_message
+                   is_required, sort_no, segment_local_order, parse_status, parse_message
             FROM rp_template_element
             WHERE id = @id;
             """;
@@ -661,6 +665,9 @@ public sealed class MySqlTemplateElementRepository : ITemplateElementRepository
     {
         Id = reader.GetUInt64("id"),
         TemplateVersionId = reader.GetUInt64("template_version_id"),
+        SegmentId = reader.IsDBNull(reader.GetOrdinal("segment_id"))
+            ? null
+            : reader.GetUInt64("segment_id"),
         ElementKey = reader.GetString("element_key"),
         ElementType = reader.GetString("element_type"),
         LocatorType = reader.GetString("locator_type"),
@@ -670,6 +677,7 @@ public sealed class MySqlTemplateElementRepository : ITemplateElementRepository
         DefaultValueJson = reader.GetNullableString("default_value_json"),
         IsRequired = reader.GetBoolean(reader.GetOrdinal("is_required")),
         SortNo = reader.GetInt32("sort_no"),
+        SegmentLocalOrder = reader.GetUInt32("segment_local_order"),
         ParseStatus = reader.GetString("parse_status"),
         ParseMessage = reader.GetNullableString("parse_message"),
     };

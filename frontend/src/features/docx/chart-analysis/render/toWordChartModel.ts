@@ -8,6 +8,7 @@ import type {
   WordDoughnutChartModel,
   WordLineChartModel,
   WordPieChartModel,
+  WordRadarChartModel,
   WordScatterChartModel,
 } from "../../chart-recognition/types";
 import type {
@@ -45,6 +46,8 @@ export function toWordChartModel(parsed: ParsedWordChart): WordChartModel {
       return toAreaChartModel(parsed);
     case "scatter":
       return toScatterChartModel(parsed);
+    case "radar":
+      return toRadarChartModel(parsed);
     case "combo":
       return toComboChartModel(parsed);
     default:
@@ -103,11 +106,47 @@ function mapSeries(series: ParsedChartSeries[]): WordChartSeries[] {
     chartType: mapSeriesChartType(s.chartType),
     axis: s.axisRole === "none" ? undefined : s.axisRole,
     color: s.style.fill?.color?.resolvedHex ?? undefined,
+    markerSymbol: s.marker?.symbol ?? undefined,
+    markerSize: s.marker?.size ?? undefined,
     showValueLabel: s.dataLabels?.showValue,
     dataLabelPosition: s.dataLabels?.position ?? undefined,
     sourceFormula: s.values.formula ?? undefined,
     numberFormat: s.values.formatCode ?? undefined,
   }));
+}
+
+function toRadarChartModel(parsed: ParsedWordChart): WordRadarChartModel {
+  const group = parsed.plotGroups[0];
+  const radarStyle = group?.radarStyle ?? "standard";
+  const valueAxis = parsed.axes.find((axis) => axis.type === "value");
+  const explicitMarker = parsed.series.some(
+    (item) => item.marker?.symbol != null && item.marker.symbol !== "none"
+  );
+  const series = mapSeries(parsed.series).map((item, index) => ({
+    ...item,
+    color:
+      parsed.series[index].style.line?.color?.resolvedHex ??
+      parsed.series[index].style.fill?.color?.resolvedHex ??
+      parsed.series[index].marker?.color?.resolvedHex ??
+      item.color,
+    showValueLabel:
+      parsed.series[index].dataLabels?.showValue ??
+      parsed.dataLabels?.showValue ??
+      false,
+  }));
+
+  return {
+    ...baseFields(parsed),
+    type: "radar",
+    radarStyle,
+    min: valueAxis?.min ?? undefined,
+    max: valueAxis?.max ?? undefined,
+    showMarker: radarStyle === "marker" || explicitMarker,
+    filled: radarStyle === "filled",
+    categories: mapCategories(parsed.categories),
+    series,
+    legend: mapLegend(parsed),
+  };
 }
 
 function toLegacyAxisInfo(axis: ChartAxisDefinition | undefined) {

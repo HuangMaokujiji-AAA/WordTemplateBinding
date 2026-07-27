@@ -16,8 +16,10 @@ public sealed class TemplateCatalogService
     private readonly ITemplateRepository _templates;
     private readonly ITemplateVersionRepository _versions;
     private readonly ITemplateElementRepository _elements;
+    private readonly ITemplateSegmentRepository _segments;
     private readonly IFileStorageService _files;
     private readonly IWordTemplateScanner _scanner;
+    private readonly IWordTemplateSegmentScanner _segmentScanner;
     private readonly ITemplateElementIdentityResolver _identityResolver;
     private readonly TemplateProcessingOptions _options;
     private readonly DatabaseFileStorageOptions _fileOptions;
@@ -26,8 +28,10 @@ public sealed class TemplateCatalogService
         ITemplateRepository templates,
         ITemplateVersionRepository versions,
         ITemplateElementRepository elements,
+        ITemplateSegmentRepository segments,
         IFileStorageService files,
         IWordTemplateScanner scanner,
+        IWordTemplateSegmentScanner segmentScanner,
         ITemplateElementIdentityResolver identityResolver,
         TemplateProcessingOptions options,
         DatabaseFileStorageOptions fileOptions)
@@ -35,8 +39,10 @@ public sealed class TemplateCatalogService
         _templates = templates;
         _versions = versions;
         _elements = elements;
+        _segments = segments;
         _files = files;
         _scanner = scanner;
+        _segmentScanner = segmentScanner;
         _identityResolver = identityResolver;
         _options = options;
         _fileOptions = fileOptions;
@@ -228,15 +234,43 @@ public sealed class TemplateCatalogService
             TemplateScanResult scanResult = await _scanner.ScanAsync(
                 input,
                 cancellationToken);
+            input.Position = 0;
+            TemplateSegmentScanResult segmentScan =
+                await _segmentScanner.ScanAsync(input, cancellationToken);
+            IReadOnlyList<TemplateSegmentRecord> segments =
+                await _segments.ReplaceForVersionAsync(
+                    version.Id,
+                    segmentScan.Segments,
+                    actorUserId: null,
+                    cancellationToken);
             List<TemplateElementRecord> elements = BuildElements(
                 version.Id,
-                scanResult);
+                scanResult,
+                segmentScan,
+                segments);
             await _elements.ReplaceAsync(version.Id, elements, cancellationToken);
+            int unassignedMainDocumentElements = elements.Count(element =>
+                element.SegmentId is null && IsMainDocumentElement(element));
+            IReadOnlyList<TemplateParseWarning> segmentWarnings =
+                segmentScan.Diagnostics.Select(item =>
+                        new TemplateParseWarning(item.Code, item.Message))
+                    .Concat(unassignedMainDocumentElements == 0
+                        ? Array.Empty<TemplateParseWarning>()
+                        : new[]
+                        {
+                            new TemplateParseWarning(
+                                "SEGMENT_ELEMENT_UNASSIGNED",
+                                $"{unassignedMainDocumentElements} 个正文模板元素不在任何有效片段范围内。"),
+                        })
+                    .ToList()
+                    .AsReadOnly();
 
             TemplateParseResult parseResult = new()
             {
                 ScanResult = scanResult,
-                Warnings = scanResult.Warnings,
+                Warnings = scanResult.Warnings.Concat(segmentWarnings)
+                    .ToList()
+                    .AsReadOnly(),
                 ImportSummary = new TemplateImportSummary
                 {
                     UnresolvedPlaceholders = scanResult.MockItems
@@ -251,7 +285,7 @@ public sealed class TemplateCatalogService
                 },
             };
             string json = JsonSerializer.Serialize(parseResult, JsonOptions);
-            string status = scanResult.Warnings.Count == 0
+            string status = parseResult.Warnings.Count == 0
                 ? "READY"
                 : "READY_WITH_WARNINGS";
             await _versions.CompleteAsync(
@@ -289,13 +323,22 @@ public sealed class TemplateCatalogService
 
     private List<TemplateElementRecord> BuildElements(
         ulong versionId,
-        TemplateScanResult scanResult)
+        TemplateScanResult scanResult,
+        TemplateSegmentScanResult segmentScan,
+        IReadOnlyList<TemplateSegmentRecord> segmentRecords)
     {
         List<TemplateElementRecord> result =
             new(scanResult.MockItems.Count + scanResult.Charts.Count);
         int sort = 0;
+        Dictionary<string, TemplateSegmentRecord> recordsByKey = segmentRecords
+            .ToDictionary(item => item.SegmentKey, StringComparer.Ordinal);
+        Dictionary<ulong, uint> localOrders = new();
         foreach (MockDataItem item in scanResult.MockItems)
         {
+            TemplateSegmentRecord? assigned = FindTextSegment(
+                item,
+                segmentScan.Segments,
+                recordsByKey);
             TemplateElementIdentity identity = _identityResolver.Resolve(
                 item.LocatorId,
                 item.Locator,
@@ -311,6 +354,7 @@ public sealed class TemplateCatalogService
             {
                 Id = 0,
                 TemplateVersionId = versionId,
+                SegmentId = assigned?.Id,
                 ElementKey = identity.ElementKey,
                 ElementType = "TEXT",
                 LocatorType = "OPENXML_TEXT_RANGE",
@@ -344,6 +388,7 @@ public sealed class TemplateCatalogService
                 DefaultValueJson = JsonSerializer.Serialize(item.MockValue, JsonOptions),
                 IsRequired = false,
                 SortNo = sort++,
+                SegmentLocalOrder = NextLocalOrder(assigned?.Id, localOrders),
                 ParseStatus = "VALID",
                 ParseMessage = null,
             });
@@ -351,10 +396,15 @@ public sealed class TemplateCatalogService
 
         foreach (ChartTemplateItem chart in scanResult.Charts)
         {
+            TemplateSegmentRecord? assigned = FindChartSegment(
+                chart,
+                segmentScan.Segments,
+                recordsByKey);
             result.Add(new TemplateElementRecord
             {
                 Id = 0,
                 TemplateVersionId = versionId,
+                SegmentId = assigned?.Id,
                 ElementKey = $"chart:{chart.LocatorId}",
                 ElementType = "CHART",
                 LocatorType = "RELATIONSHIP",
@@ -381,12 +431,103 @@ public sealed class TemplateCatalogService
                 DefaultValueJson = null,
                 IsRequired = false,
                 SortNo = sort++,
+                SegmentLocalOrder = NextLocalOrder(assigned?.Id, localOrders),
                 ParseStatus = chart.IsBindable ? "VALID" : "UNSUPPORTED",
                 ParseMessage = chart.IsBindable ? null : "图表没有可写的数据系列缓存。",
             });
         }
 
         return result;
+    }
+
+    private static TemplateSegmentRecord? FindTextSegment(
+        MockDataItem item,
+        IReadOnlyList<TemplateSegmentDefinition> definitions,
+        IReadOnlyDictionary<string, TemplateSegmentRecord> records)
+    {
+        if (item.Locator.PartKind == DocumentPartKind.TextBox)
+        {
+            string key = $"{item.Locator.PartKey}:{item.Locator.ParagraphIndex}";
+            TemplateSegmentDefinition? textBoxDefinition = definitions
+                .Where(segment => segment.TextBoxLocatorKeys.Contains(key))
+                .OrderByDescending(segment => segment.Depth)
+                .ThenBy(segment => segment.DocumentOrderEnd - segment.DocumentOrderStart)
+                .FirstOrDefault();
+            return textBoxDefinition is null
+                ? null
+                : records.GetValueOrDefault(textBoxDefinition.SegmentKey);
+        }
+
+        if (item.Locator.PartKind != DocumentPartKind.MainDocument)
+        {
+            return null;
+        }
+
+        TemplateSegmentDefinition? definition = definitions
+            .Where(segment =>
+                segment.MainDocumentParagraphIndexes.Contains(item.Locator.ParagraphIndex))
+            .OrderByDescending(segment => segment.Depth)
+            .ThenBy(segment => segment.DocumentOrderEnd - segment.DocumentOrderStart)
+            .FirstOrDefault();
+        return definition is null ? null : records.GetValueOrDefault(definition.SegmentKey);
+    }
+
+    private static TemplateSegmentRecord? FindChartSegment(
+        ChartTemplateItem chart,
+        IReadOnlyList<TemplateSegmentDefinition> definitions,
+        IReadOnlyDictionary<string, TemplateSegmentRecord> records)
+    {
+        // OpenXmlChartReader currently scans chart references from MainDocumentPart
+        // only. ChartLocator.PartKey identifies the ChartPart
+        // (/word/charts/chartN.xml), while segment membership is determined by the
+        // relationship ID on the drawing in /word/document.xml.
+        TemplateSegmentDefinition? definition = definitions
+            .Where(segment => segment.MainDocumentChartRelationshipIds.Contains(
+                chart.Locator.RelationshipId))
+            .OrderByDescending(segment => segment.Depth)
+            .ThenBy(segment => segment.DocumentOrderEnd - segment.DocumentOrderStart)
+            .FirstOrDefault();
+        return definition is null ? null : records.GetValueOrDefault(definition.SegmentKey);
+    }
+
+    private static uint NextLocalOrder(
+        ulong? segmentId,
+        IDictionary<ulong, uint> localOrders)
+    {
+        if (segmentId is null)
+        {
+            return 0;
+        }
+
+        localOrders.TryGetValue(segmentId.Value, out uint value);
+        localOrders[segmentId.Value] = value + 1;
+        return value;
+    }
+
+    private static bool IsMainDocumentElement(TemplateElementRecord element)
+    {
+        try
+        {
+            using JsonDocument locator = JsonDocument.Parse(element.LocatorJson);
+            JsonElement root = locator.RootElement;
+            if (root.TryGetProperty("partKind", out JsonElement partKind))
+            {
+                return string.Equals(
+                    partKind.GetString(),
+                    nameof(DocumentPartKind.MainDocument),
+                    StringComparison.OrdinalIgnoreCase);
+            }
+
+            return root.TryGetProperty("partKey", out JsonElement partKey) &&
+                   string.Equals(
+                       partKey.GetString(),
+                       "/word/document.xml",
+                       StringComparison.OrdinalIgnoreCase);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     private async Task<StoredFile> StoreFileAsync(

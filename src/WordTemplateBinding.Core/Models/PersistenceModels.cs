@@ -110,6 +110,7 @@ public sealed record TemplateElementRecord
 {
     public required ulong Id { get; init; }
     public required ulong TemplateVersionId { get; init; }
+    public ulong? SegmentId { get; init; }
     public required string ElementKey { get; init; }
     public required string ElementType { get; init; }
     public required string LocatorType { get; init; }
@@ -119,8 +120,107 @@ public sealed record TemplateElementRecord
     public string? DefaultValueJson { get; init; }
     public required bool IsRequired { get; init; }
     public required int SortNo { get; init; }
+    public uint SegmentLocalOrder { get; init; }
     public required string ParseStatus { get; init; }
     public string? ParseMessage { get; init; }
+}
+
+public sealed record TemplateSegmentRecord
+{
+    public required ulong Id { get; init; }
+    public required ulong TemplateVersionId { get; init; }
+    public ulong? ParentSegmentId { get; init; }
+    public required string SegmentKey { get; init; }
+    public required string SegmentName { get; init; }
+    public required string SegmentType { get; init; }
+    public required string AnchorType { get; init; }
+    public required string StartAnchorJson { get; init; }
+    public string? EndAnchorJson { get; init; }
+    public required uint DocumentOrderStart { get; init; }
+    public required uint DocumentOrderEnd { get; init; }
+    public required string SegmentStatus { get; init; }
+    public string? SegmentFingerprint { get; init; }
+    public ulong? PreviewFileObjectId { get; init; }
+    public required string PreviewStatus { get; init; }
+    public string? PreviewErrorMessage { get; init; }
+    public required int SortNo { get; init; }
+    public required uint RowVersion { get; init; }
+    public ulong? CreatedBy { get; init; }
+    public required DateTimeOffset CreatedAt { get; init; }
+    public ulong? UpdatedBy { get; init; }
+    public required DateTimeOffset UpdatedAt { get; init; }
+}
+
+public sealed record TemplateSegmentDefinition
+{
+    public required string SegmentKey { get; init; }
+    public required string SegmentName { get; init; }
+    public string? ParentSegmentKey { get; init; }
+    public required string SegmentType { get; init; }
+    public required string AnchorType { get; init; }
+    public required string StartAnchorJson { get; init; }
+    public string? EndAnchorJson { get; init; }
+    public required uint DocumentOrderStart { get; init; }
+    public required uint DocumentOrderEnd { get; init; }
+    public required string SegmentStatus { get; init; }
+    public required string SegmentFingerprint { get; init; }
+    public required int SortNo { get; init; }
+    public IReadOnlySet<int> MainDocumentParagraphIndexes { get; init; } =
+        new HashSet<int>();
+    public IReadOnlySet<string> MainDocumentChartRelationshipIds { get; init; } =
+        new HashSet<string>(StringComparer.Ordinal);
+    public IReadOnlySet<string> TextBoxLocatorKeys { get; init; } =
+        new HashSet<string>(StringComparer.Ordinal);
+    public int Depth { get; init; }
+}
+
+public sealed record TemplateSegmentDiagnostic(
+    string Code,
+    string Level,
+    string Message,
+    string? SegmentKey = null);
+
+public sealed record TemplateSegmentScanResult
+{
+    public required IReadOnlyList<TemplateSegmentDefinition> Segments { get; init; }
+    public IReadOnlyList<TemplateSegmentDiagnostic> Diagnostics { get; init; } =
+        Array.Empty<TemplateSegmentDiagnostic>();
+}
+
+public sealed record TemplateSegmentListItem
+{
+    public required TemplateSegmentRecord Segment { get; init; }
+    public required int ElementCount { get; init; }
+    public required int BoundCount { get; init; }
+    public required int RequiredMissingCount { get; init; }
+}
+
+public sealed record TemplateOutlineBlock
+{
+    public required string BlockId { get; init; }
+    public required string BlockType { get; init; }
+    public required string DisplayText { get; init; }
+    public string? SegmentKey { get; init; }
+    public required bool CanSelect { get; init; }
+    public required int Depth { get; init; }
+    public IReadOnlyList<TemplateOutlineBlock> Children { get; init; } =
+        Array.Empty<TemplateOutlineBlock>();
+}
+
+public sealed record TemplateSegmentOutline
+{
+    public required ulong TemplateVersionId { get; init; }
+    public required string ContentHash { get; init; }
+    public required IReadOnlyList<TemplateOutlineBlock> Blocks { get; init; }
+}
+
+public sealed record InsertTemplateSegmentBoundaryRequest
+{
+    public required string SegmentKey { get; init; }
+    public required string SegmentName { get; init; }
+    public required string StartBlockId { get; init; }
+    public required string EndBlockId { get; init; }
+    public required string ExpectedContentHash { get; init; }
 }
 
 public sealed record TemplateParseWarning(string Code, string Message);

@@ -61,10 +61,12 @@ internal static class OpenXmlChartDataReader
             OpenXmlElement ser = seriesElements[i];
             string name = ReadSeriesText(ser, i);
             string? nameFormula = ReadChildFormula(FindChild(ser, "tx"), "strRef");
+            string? nameSheet = ParseSheetName(nameFormula);
             string? nameCell = ParseStartCell(nameFormula);
 
             var valueElem = FindChild(ser, "val") ?? FindChild(ser, "yVal");
             string? valueFormula = ReadChildFormula(valueElem, "numRef");
+            string? valueSheet = ParseSheetName(valueFormula);
             string? valueStart = ParseStartCell(valueFormula);
             string? valueEnd = ParseEndCell(valueFormula);
             string? numFmt = GetFormatCode(valueElem);
@@ -77,8 +79,10 @@ internal static class OpenXmlChartDataReader
                 SeriesKey = $"series-{i}",
                 Name = name,
                 NameFormula = nameFormula,
+                NameSheetName = nameSheet,
                 NameCell = nameCell,
                 ValueFormula = valueFormula,
+                ValueSheetName = valueSheet,
                 ValueStartCell = valueStart,
                 ValueEndCell = valueEnd,
                 Values = values.AsReadOnly(),
@@ -89,7 +93,9 @@ internal static class OpenXmlChartDataReader
         // Read categories
         OpenXmlElement? firstSer = seriesElements.FirstOrDefault();
         var catElem = firstSer is null ? null : FindChild(firstSer, "cat") ?? FindChild(firstSer, "xVal");
-        string? catFormula = ReadChildFormula(catElem, "strRef") ?? ReadChildFormula(catElem, "numRef");
+        string? catFormula = ReadChildFormula(catElem, "strRef")
+            ?? ReadChildFormula(catElem, "numRef")
+            ?? ReadChildFormula(catElem, "multiLvlStrRef");
         string? catStart = ParseStartCell(catFormula);
         string? catEnd = ParseEndCell(catFormula);
         string? catSheet = ParseSheetName(catFormula);
@@ -109,7 +115,8 @@ internal static class OpenXmlChartDataReader
 
         // Current data rows
         int rowCount = catValues.Count;
-        if (rowCount == 0) rowCount = seriesDefs.Max(s => s.Values.Count);
+        if (rowCount == 0)
+            rowCount = seriesDefs.Count == 0 ? 0 : seriesDefs.Max(s => s.Values.Count);
         List<ChartDataRowSnapshot> currentData = new(rowCount);
         for (int r = 0; r < rowCount; r++)
         {
@@ -126,9 +133,57 @@ internal static class OpenXmlChartDataReader
         }
 
         // Write capability
-        string writeCapability = hasEmbeddedWorkbook ? "workbook-and-cache" : "cache-only";
-        if (chartType is "unsupported" or "radar") writeCapability = "unsupported";
-        if (seriesDefs.Count == 0) writeCapability = "unsupported";
+        bool categoryCacheWritable = firstSer is not null && HasWritableCategoryCache(firstSer);
+        bool allValueCachesWritable = seriesElements.Count > 0 &&
+            seriesElements.All(HasWritableValueCache);
+
+        string writeCapability = hasEmbeddedWorkbook
+            ? "workbook-and-cache"
+            : "cache-only";
+        if (chartType == "unsupported" ||
+            seriesDefs.Count == 0 ||
+            !allValueCachesWritable ||
+            (chartType == "radar" && (!categoryCacheWritable || catValues.Count == 0)))
+        {
+            writeCapability = "unsupported";
+        }
+
+        if (chartType == "radar")
+        {
+            if (seriesDefs.Count == 0)
+                diagnostics.Add(Diag("radar_missing_series", "warning", "雷达图没有数据系列。"));
+            if (catValues.Count == 0)
+                diagnostics.Add(Diag("radar_missing_categories", "warning", "雷达图没有分类指标。"));
+            if (!categoryCacheWritable)
+                diagnostics.Add(Diag("radar_missing_category_cache", "warning", "雷达图没有可写分类缓存。"));
+
+            for (int i = 0; i < seriesElements.Count; i++)
+            {
+                if (!HasWritableValueCache(seriesElements[i]))
+                {
+                    diagnostics.Add(new ChartDiagnosticItem
+                    {
+                        Code = "radar_missing_value_cache",
+                        Level = "warning",
+                        Message = $"雷达图系列 {i + 1} 没有可写数值缓存。",
+                        SeriesIndex = i,
+                        Recoverable = true,
+                    });
+                }
+
+                if (catValues.Count > 0 && seriesDefs[i].Values.Count != catValues.Count)
+                {
+                    diagnostics.Add(new ChartDiagnosticItem
+                    {
+                        Code = "radar_series_length_mismatch",
+                        Level = "warning",
+                        Message = $"雷达图系列 \"{seriesDefs[i].Name}\" 的数值数量 {seriesDefs[i].Values.Count} 与指标数量 {catValues.Count} 不一致。",
+                        SeriesIndex = i,
+                        Recoverable = true,
+                    });
+                }
+            }
+        }
         bool isBindable = writeCapability != "unsupported";
 
         if (!isBindable) { diagnostics.Add(Diag("chart_not_bindable", "warning", "该图表不支持数据写回")); }
@@ -211,6 +266,19 @@ internal static class OpenXmlChartDataReader
     {
         var result = new List<string?>();
         if (container is null) return result;
+
+        OpenXmlElement? multiRef = FindChild(container, "multiLvlStrRef");
+        OpenXmlElement? multiCache = multiRef is null
+            ? null
+            : FindChild(multiRef, "multiLvlStrCache");
+        if (multiCache is not null)
+        {
+            OpenXmlElement? finestLevel = multiCache.ChildElements
+                .FirstOrDefault(e => e.LocalName == "lvl");
+            if (finestLevel is null) return result;
+            return ReadIndexedStringPoints(finestLevel, ReadPointCount(multiCache));
+        }
+
         foreach (var child in container.ChildElements)
         {
             if (child.LocalName is not ("strRef" or "strLit" or "numRef")) continue;
@@ -243,6 +311,39 @@ internal static class OpenXmlChartDataReader
         return result;
     }
 
+    private static List<string?> ReadIndexedStringPoints(
+        OpenXmlElement source,
+        int declaredPointCount)
+    {
+        List<string?> result = new();
+        int maxIdx = -1;
+        foreach (OpenXmlElement pt in source.ChildElements.Where(e => e.LocalName == "pt"))
+        {
+            uint idxVal = 0;
+            OpenXmlAttribute idxAttr = pt.GetAttribute("idx", string.Empty);
+            if (!string.IsNullOrEmpty(idxAttr.Value))
+                uint.TryParse(idxAttr.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out idxVal);
+            while (result.Count < (int)idxVal) result.Add(null);
+            result.Add(GetChildText(pt, "v"));
+            maxIdx = Math.Max(maxIdx, (int)idxVal);
+        }
+
+        int expected = Math.Max(declaredPointCount, maxIdx + 1);
+        while (result.Count < expected) result.Add(null);
+        return result;
+    }
+
+    private static int ReadPointCount(OpenXmlElement source)
+    {
+        OpenXmlElement? pointCount = FindChild(source, "ptCount");
+        string? raw = pointCount is null
+            ? null
+            : pointCount.GetAttribute("val", string.Empty).Value;
+        return int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out int count)
+            ? count
+            : 0;
+    }
+
     private static string? GetFormatCode(OpenXmlElement? container)
     {
         if (container is null) return null;
@@ -272,10 +373,46 @@ internal static class OpenXmlChartDataReader
     {
         if (string.IsNullOrWhiteSpace(formula)) return null;
         var bang = formula.IndexOf('!');
-        var range = bang >= 0 ? formula[(bang + 1)..].TrimStart('$') : formula.TrimStart('$');
+        var range = (bang >= 0 ? formula[(bang + 1)..] : formula).Replace("$", string.Empty);
         var parts = range.Split(':');
         if (start) return parts[0];
-        return parts.Length > 1 ? parts[1].TrimStart('$') : parts[0];
+        return parts.Length > 1 ? parts[1] : parts[0];
+    }
+
+    private static bool HasWritableCategoryCache(OpenXmlElement series)
+    {
+        OpenXmlElement? container = FindChild(series, "cat") ?? FindChild(series, "xVal");
+        return HasCache(
+            container,
+            ("strRef", "strCache"),
+            ("numRef", "numCache"),
+            ("multiLvlStrRef", "multiLvlStrCache"),
+            ("strLit", "strLit"),
+            ("numLit", "numLit"));
+    }
+
+    private static bool HasWritableValueCache(OpenXmlElement series)
+    {
+        OpenXmlElement? container = FindChild(series, "val") ?? FindChild(series, "yVal");
+        return HasCache(
+            container,
+            ("numRef", "numCache"),
+            ("numLit", "numLit"));
+    }
+
+    private static bool HasCache(
+        OpenXmlElement? container,
+        params (string Source, string Cache)[] shapes)
+    {
+        if (container is null) return false;
+        foreach ((string sourceName, string cacheName) in shapes)
+        {
+            OpenXmlElement? source = FindChild(container, sourceName);
+            if (source is null) continue;
+            if (sourceName == cacheName || FindChild(source, cacheName) is not null)
+                return true;
+        }
+        return false;
     }
 
     private static ChartDiagnosticItem Diag(string code, string level, string msg) => new()

@@ -14,9 +14,16 @@ internal static class ChartDataBindingResolver
         ChartBindingMapping mapping,
         ChartDataDefinition definition)
     {
+        if (string.Equals(definition.WriteCapability, "unsupported", StringComparison.Ordinal))
+            throw new FormatException("该图表缺少可写缓存，不能执行数据绑定。");
+
         var items = ReadArrayItems(sourceValue);
         if (items.Count == 0)
             throw new FormatException("图表数据集为空。");
+        if (definition.ChartType == "radar" && items.Count < 3)
+            throw new FormatException("雷达图至少需要 3 个指标。");
+        if (definition.ChartType == "radar" && definition.Series.Count == 0)
+            throw new FormatException("雷达图至少需要 1 个系列。");
 
         // Extract categories
         var categories = new List<string?>(items.Count);
@@ -24,6 +31,11 @@ internal static class ChartDataBindingResolver
         {
             var catVal = GetFieldValue(item, mapping.CategoryField);
             categories.Add(catVal is null ? null : Convert.ToString(catVal, CultureInfo.InvariantCulture));
+        }
+        if (definition.ChartType == "radar" &&
+            categories.All(value => string.IsNullOrWhiteSpace(value)))
+        {
+            throw new FormatException("雷达图分类名称不能全部为空。");
         }
 
         // Build series
@@ -115,6 +127,12 @@ internal static class ChartDataBindingResolver
 
         // Sort by series index
         normalizedSeries.Sort((a, b) => a.SeriesIndex.CompareTo(b.SeriesIndex));
+
+        if (definition.ChartType == "radar" &&
+            normalizedSeries.Any(item => item.Values.Count != categories.Count))
+        {
+            throw new FormatException("雷达图分类数量必须与每个系列的数值数量一致。");
+        }
 
         return new NormalizedChartData
         {

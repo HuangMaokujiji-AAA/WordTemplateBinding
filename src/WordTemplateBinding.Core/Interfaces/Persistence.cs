@@ -99,6 +99,30 @@ public interface ITemplateElementRepository
     Task<TemplateElementRecord?> GetAsync(ulong id, CancellationToken cancellationToken);
 }
 
+public interface ITemplateSegmentRepository
+{
+    Task<IReadOnlyList<TemplateSegmentRecord>> ReplaceForVersionAsync(
+        ulong templateVersionId,
+        IReadOnlyList<TemplateSegmentDefinition> segments,
+        ulong? actorUserId,
+        CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<TemplateSegmentRecord>> ListAsync(
+        ulong templateVersionId,
+        CancellationToken cancellationToken);
+
+    Task<TemplateSegmentRecord?> GetAsync(
+        ulong segmentId,
+        CancellationToken cancellationToken);
+
+    Task SetPreviewAsync(
+        ulong segmentId,
+        ulong? previewFileObjectId,
+        string previewStatus,
+        string? errorMessage,
+        CancellationToken cancellationToken);
+}
+
 public interface IProjectRepository
 {
     Task<ProjectRecord> CreateAsync(

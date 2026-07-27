@@ -12,6 +12,8 @@ export type {
   WordDoughnutChartModel,
   WordAreaChartModel,
   WordScatterChartModel,
+  WordRadarChartModel,
+  RadarStyle,
   WordComboChartModel,
 } from "./types";
 
@@ -37,6 +39,7 @@ export { PieChartHandler } from "./detectors/pieChartHandler";
 export { DoughnutChartHandler } from "./detectors/doughnutChartHandler";
 export { AreaChartHandler } from "./detectors/areaChartHandler";
 export { ScatterChartHandler } from "./detectors/scatterChartHandler";
+export { RadarChartHandler } from "./detectors/radarChartHandler";
 export { ComboChartHandler } from "./detectors/comboChartHandler";
 export { UnsupportedChartHandler } from "./detectors/unsupportedChartDetector";
 
@@ -48,6 +51,7 @@ export { wordDoughnutChartToECharts } from "./mappers/wordDoughnutChartToECharts
 export { wordAreaChartToECharts } from "./mappers/wordAreaChartToECharts";
 export { wordScatterChartToECharts } from "./mappers/wordScatterChartToECharts";
 export { wordComboChartToECharts } from "./mappers/wordComboChartToECharts";
+export { wordRadarChartToECharts } from "./mappers/wordRadarChartToECharts";
 
 // Renderers
 export { renderBarChart } from "./renderers/EChartsBarRenderer";
@@ -57,11 +61,13 @@ export { renderDoughnutChart } from "./renderers/EChartsDoughnutRenderer";
 export { renderAreaChart } from "./renderers/EChartsAreaRenderer";
 export { renderScatterChart } from "./renderers/EChartsScatterRenderer";
 export { renderComboChart } from "./renderers/EChartsComboRenderer";
+export { renderRadarChart } from "./renderers/EChartsRadarRenderer";
 export { renderUnsupportedChart } from "./renderers/UnsupportedChartRenderer";
 
 // Utils
 export { normalizeChartNumber, formatChartValue } from "./utils/numberUtils";
 export { emuToPixels, EMU_PER_PIXEL_AT_96_DPI } from "./utils/emuUtils";
+export { resolveRadarScale } from "./utils/radarScale";
 
 // Initialize default handlers
 import { clearHandlers, registerChartHandler } from "./chartRegistry";
@@ -71,6 +77,7 @@ import { PieChartHandler } from "./detectors/pieChartHandler";
 import { DoughnutChartHandler } from "./detectors/doughnutChartHandler";
 import { AreaChartHandler } from "./detectors/areaChartHandler";
 import { ScatterChartHandler } from "./detectors/scatterChartHandler";
+import { RadarChartHandler } from "./detectors/radarChartHandler";
 import { ComboChartHandler } from "./detectors/comboChartHandler";
 import { UnsupportedChartHandler } from "./detectors/unsupportedChartDetector";
 
@@ -90,6 +97,7 @@ export function initChartRecognition(): void {
   registerChartHandler(DoughnutChartHandler);
   registerChartHandler(AreaChartHandler);
   registerChartHandler(ScatterChartHandler);
+  registerChartHandler(RadarChartHandler);
   registerChartHandler(ComboChartHandler);
   // Must be registered LAST — it handles anything the above don't
   registerChartHandler(UnsupportedChartHandler);

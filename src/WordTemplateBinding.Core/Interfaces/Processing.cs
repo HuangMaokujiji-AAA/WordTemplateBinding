@@ -30,6 +30,53 @@ public interface IWordTemplateScanner
         CancellationToken cancellationToken = default);
 }
 
+/// <summary>定义完整 DOCX 中逻辑模板片段的扫描能力。</summary>
+public interface IWordTemplateSegmentScanner
+{
+    /// <summary>扫描可定位 DOCX 流中的片段内容控件。</summary>
+    /// <param name="seekableDocxStream">可读、可定位的 DOCX 流。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>片段定义和诊断。</returns>
+    Task<TemplateSegmentScanResult> ScanAsync(
+        Stream seekableDocxStream,
+        CancellationToken cancellationToken = default);
+}
+
+/// <summary>定义从完整模板副本渲染单一逻辑片段预览的能力。</summary>
+public interface IWordSegmentPreviewRenderer
+{
+    /// <summary>生成只保留目标片段正文的 DOCX 预览流。</summary>
+    /// <param name="sourceDocxPath">完整原始模板的临时文件路径。</param>
+    /// <param name="segment">目标片段。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>位于起始位置的可读 DOCX 流。</returns>
+    Task<Stream> RenderAsync(
+        string sourceDocxPath,
+        TemplateSegmentRecord segment,
+        CancellationToken cancellationToken = default);
+}
+
+/// <summary>定义完整模板中块级片段边界的结构读取和版本化编辑能力。</summary>
+public interface IWordTemplateSegmentEditor
+{
+    /// <summary>读取可用于边界选择的轻量块级结构。</summary>
+    Task<IReadOnlyList<TemplateOutlineBlock>> ReadOutlineAsync(
+        string sourceDocxPath,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>在连续同级块外插入片段内容控件，并返回完整 DOCX 副本。</summary>
+    Task<Stream> InsertBoundaryAsync(
+        string sourceDocxPath,
+        InsertTemplateSegmentBoundaryRequest request,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>移除指定片段内容控件外壳并保留全部内部内容。</summary>
+    Task<Stream> RemoveBoundaryAsync(
+        string sourceDocxPath,
+        string segmentKey,
+        CancellationToken cancellationToken = default);
+}
+
 /// <summary>
 /// 定义基于模板副本生成 Word 报告的能力。
 /// </summary>

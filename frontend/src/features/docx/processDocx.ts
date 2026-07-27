@@ -20,6 +20,7 @@ import { renderDoughnutChart } from "./chart-recognition/renderers/EChartsDoughn
 import { renderAreaChart } from "./chart-recognition/renderers/EChartsAreaRenderer";
 import { renderScatterChart } from "./chart-recognition/renderers/EChartsScatterRenderer";
 import { renderComboChart } from "./chart-recognition/renderers/EChartsComboRenderer";
+import { renderRadarChart } from "./chart-recognition/renderers/EChartsRadarRenderer";
 import { renderUnsupportedChart } from "./chart-recognition/renderers/UnsupportedChartRenderer";
 import type {
   WordChartModel,
@@ -29,6 +30,7 @@ import type {
   WordDoughnutChartModel,
   WordAreaChartModel,
   WordScatterChartModel,
+  WordRadarChartModel,
   WordComboChartModel,
 } from "./chart-recognition/types";
 
@@ -249,7 +251,9 @@ export async function processDocx(
         });
 
         const status: ChartProcessStatus = parsed.supportedForPreview
-          ? (parsed.diagnostics.hasErrors ? "partially-rendered" : "rendered")
+          ? (parsed.diagnostics.hasErrors || parsed.diagnostics.hasWarnings
+              ? "partially-rendered"
+              : "rendered")
           : "unsupported";
 
         chartResults.push({
@@ -327,6 +331,9 @@ export async function processDocx(
             break;
           case "combo":
             echartsInstance = renderComboChart(model as WordComboChartModel, canvasEl);
+            break;
+          case "radar":
+            echartsInstance = renderRadarChart(model as WordRadarChartModel, canvasEl);
             break;
           case "unsupported": {
             const parentEl = canvasEl.parentElement;

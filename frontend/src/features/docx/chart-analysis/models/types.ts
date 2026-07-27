@@ -188,6 +188,7 @@ export interface ParsedChartSeries {
 // ---- Plot groups (combo chart support) ----
 
 export type ChartGrouping = "standard" | "clustered" | "stacked" | "percentStacked" | null;
+export type RadarStyle = "standard" | "marker" | "filled";
 
 export interface ChartPlotGroup {
   id: string;
@@ -199,6 +200,7 @@ export interface ChartPlotGroup {
 
   barDirection: "bar" | "col" | null;
   scatterStyle: string | null;
+  radarStyle: RadarStyle | null;
 
   seriesKeys: string[];
   axisIds: string[];

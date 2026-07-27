@@ -342,3 +342,15 @@ POST /api/binding-sets/{bindingSetId}/export-reusable
 ## 7. 开发兼容 API
 
 `Persistence:Mode=InMemory` 时额外映射原 GUID 演示接口（`/api/templates/upload`、`/api/bindings`、`/api/reports/generate` 等）用于既有回归测试。生产 MySQL 模式不映射这些端点；新前端只调用本文件描述的正式 API。
+# 模板片段 API
+
+- `GET /api/template-versions/{versionId}/segments?bindingSetId={bindingSetId}`：按文档顺序返回片段树节点；提供绑定集时同时返回当前片段绑定进度。
+- `GET /api/template-segments/{segmentId}`：返回片段锚点、指纹、状态和预览缓存状态。
+- `GET /api/template-segments/{segmentId}/elements`：仅返回归属于该片段最内层范围的模板元素。
+- `GET /api/template-segments/{segmentId}/preview`：同步生成或复用片段 DOCX 预览缓存并返回文件流。
+- `GET /api/template-versions/{versionId}/segment-outline`：返回可用于网页边界编辑的轻量块级结构和当前内容哈希。
+- `POST /api/template-versions/{versionId}/segment-boundaries`：在连续同级块外插入内容控件边界，并返回新建的不可变模板版本。
+- `DELETE /api/template-versions/{versionId}/segment-boundaries/{segmentKey}?expectedContentHash=...`：移除边界外壳、保留全部内容，并返回新模板版本。
+
+片段预览不是正式模板。报告生成接口仍以完整的 `rp_template_version.file_object_id` 为输入。
+边界插入和删除不会原地修改已有模板版本；请求中的内容哈希用于拒绝过期结构选择。

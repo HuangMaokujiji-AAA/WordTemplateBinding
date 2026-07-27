@@ -14,6 +14,33 @@ const backend = computed(() => props.item?.backend ?? null);
 const analysis = computed(() => backend.value?.analysis ?? null);
 const dataDef = computed(() => backend.value?.dataDefinition ?? null);
 const existingMapping = computed(() => backend.value?.chartMapping ?? null);
+const radarGroup = computed(() =>
+  parsed.value?.type === "radar"
+    ? parsed.value.plotGroups.find((group) => group.type === "radar") ?? null
+    : null
+);
+const radarStyleLabel = computed(() => {
+  switch (radarGroup.value?.radarStyle) {
+    case "marker": return "带标记";
+    case "filled": return "填充";
+    default: return "标准";
+  }
+});
+const radarValueAxis = computed(() =>
+  parsed.value?.type === "radar"
+    ? parsed.value.axes.find((axis) => axis.type === "value") ?? null
+    : null
+);
+const radarMinimum = computed(() =>
+  radarValueAxis.value?.min ??
+  analysis.value?.chart.radarMinimum ??
+  null
+);
+const radarMaximum = computed(() =>
+  radarValueAxis.value?.max ??
+  analysis.value?.chart.radarMaximum ??
+  null
+);
 
 const activeSubTab = ref<"frontend" | "binding" | "sample" | "backend">("binding");
 
@@ -199,7 +226,30 @@ const comparisonWarnings = computed(() => {
           <div><dt>分类</dt><dd>{{ parsed!.categories.length }} 项</dd></div>
           <div><dt>系列</dt><dd>{{ parsed!.series.length }} 个</dd></div>
           <div><dt>绑定</dt><dd>{{ item!.boundDataPath || "未绑定" }}</dd></div>
+          <template v-if="parsed!.type === 'radar'">
+            <div><dt>雷达样式</dt><dd>{{ radarStyleLabel }}</dd></div>
+            <div><dt>轴最小值</dt><dd>{{ radarMinimum ?? "自动" }}</dd></div>
+            <div><dt>轴最大值</dt><dd>{{ radarMaximum ?? "自动" }}</dd></div>
+            <div><dt>嵌入工作簿</dt><dd>{{ parsed!.source.embeddedWorkbookDetected ? "是" : "否" }}</dd></div>
+            <div><dt>绑定状态</dt><dd>{{ item!.canBind ? "可绑定" : "结构不完整" }}</dd></div>
+          </template>
         </dl>
+      </section>
+
+      <section v-if="parsed!.type === 'radar'" class="cs-section">
+        <h3>雷达图数据源</h3>
+        <dl class="cs-dl">
+          <div><dt>分类公式</dt><dd>{{ dataDef?.category.formula || "（缓存字面量）" }}</dd></div>
+          <div v-for="series in dataDef?.series ?? []" :key="series.seriesKey">
+            <dt>{{ series.name }} 数值公式</dt>
+            <dd>{{ series.valueFormula || "（缓存字面量）" }}</dd>
+          </div>
+        </dl>
+        <ul v-if="parsed!.diagnostics.items.length" class="cs-diagnostics">
+          <li v-for="diagnostic in parsed!.diagnostics.items" :key="`${diagnostic.code}-${diagnostic.seriesKey ?? ''}`">
+            {{ diagnostic.code }}：{{ diagnostic.message }}
+          </li>
+        </ul>
       </section>
 
       <div class="cs-subtabs">
@@ -323,6 +373,7 @@ const comparisonWarnings = computed(() => {
 .cs-table th, .cs-table td { padding: 4px 8px; border-bottom: 1px solid #f0f0f0; white-space: nowrap; text-align: left; }
 .cs-table th { background: #fafafa; position: sticky; top: 0; }
 .cs-cell--missing { color: #bbb; }
+.cs-diagnostics { margin: 8px 0 0; padding-left: 18px; color: #a05a00; font-size: 12px; }
 .cs-note { color: #999; font-size: 12px; }
 .cs-note--warn { color: #e67e22; font-weight: 500; margin-top: 8px; }
 .cs-field-row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }

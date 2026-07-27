@@ -108,6 +108,7 @@ internal static class PersistentApiMapper
     {
         id = value.Id.ToString(),
         templateVersionId = value.TemplateVersionId.ToString(),
+        segmentId = value.SegmentId?.ToString(),
         value.ElementKey,
         value.ElementType,
         value.LocatorType,
@@ -117,8 +118,74 @@ internal static class PersistentApiMapper
         defaultValue = ParseJson(value.DefaultValueJson),
         value.IsRequired,
         value.SortNo,
+        value.SegmentLocalOrder,
         value.ParseStatus,
         value.ParseMessage,
+    };
+
+    internal static object Segment(TemplateSegmentListItem value) => new
+    {
+        id = value.Segment.Id.ToString(),
+        templateVersionId = value.Segment.TemplateVersionId.ToString(),
+        parentSegmentId = value.Segment.ParentSegmentId?.ToString(),
+        value.Segment.SegmentKey,
+        value.Segment.SegmentName,
+        value.Segment.SegmentType,
+        value.Segment.AnchorType,
+        value.Segment.DocumentOrderStart,
+        value.Segment.DocumentOrderEnd,
+        value.Segment.SegmentStatus,
+        value.Segment.PreviewStatus,
+        value.Segment.PreviewErrorMessage,
+        value.Segment.SortNo,
+        value.ElementCount,
+        bindingProgress = new
+        {
+            total = value.ElementCount,
+            bound = value.BoundCount,
+            requiredMissing = value.RequiredMissingCount,
+        },
+        value.Segment.RowVersion,
+    };
+
+    internal static object SegmentDetail(TemplateSegmentRecord value) => new
+    {
+        id = value.Id.ToString(),
+        templateVersionId = value.TemplateVersionId.ToString(),
+        parentSegmentId = value.ParentSegmentId?.ToString(),
+        value.SegmentKey,
+        value.SegmentName,
+        value.SegmentType,
+        value.AnchorType,
+        startAnchor = ParseJson(value.StartAnchorJson),
+        endAnchor = ParseJson(value.EndAnchorJson),
+        value.DocumentOrderStart,
+        value.DocumentOrderEnd,
+        value.SegmentStatus,
+        value.SegmentFingerprint,
+        previewFileObjectId = value.PreviewFileObjectId?.ToString(),
+        value.PreviewStatus,
+        value.PreviewErrorMessage,
+        value.SortNo,
+        value.RowVersion,
+    };
+
+    internal static object SegmentOutline(TemplateSegmentOutline value) => new
+    {
+        templateVersionId = value.TemplateVersionId.ToString(),
+        value.ContentHash,
+        blocks = value.Blocks.Select(OutlineBlock),
+    };
+
+    private static object OutlineBlock(TemplateOutlineBlock value) => new
+    {
+        value.BlockId,
+        value.BlockType,
+        value.DisplayText,
+        value.SegmentKey,
+        value.CanSelect,
+        value.Depth,
+        children = value.Children.Select(OutlineBlock),
     };
 
     internal static object VersionView(TemplateVersionView value) => new

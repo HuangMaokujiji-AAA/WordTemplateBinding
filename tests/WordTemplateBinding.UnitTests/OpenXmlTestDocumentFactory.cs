@@ -5,6 +5,7 @@ using System.Text;
 using C = DocumentFormat.OpenXml.Drawing.Charts;
 using A = DocumentFormat.OpenXml.Drawing;
 using DW = DocumentFormat.OpenXml.Drawing.Wordprocessing;
+using S = DocumentFormat.OpenXml.Spreadsheet;
 
 namespace WordTemplateBinding.UnitTests;
 
@@ -199,6 +200,130 @@ internal static class OpenXmlTestDocumentFactory
     }
 
     /// <summary>
+    /// 创建包含双系列原生雷达图的最小 DOCX。
+    /// </summary>
+    internal static byte[] CreateRadarChartDocument(
+        string radarStyle = "marker",
+        bool includeCategories = true,
+        bool includeValueCache = true,
+        bool includeAxisRange = true,
+        bool seriesLengthMismatch = false,
+        bool includeEmbeddedWorkbook = false)
+    {
+        string[] categories = { "指标A", "指标B", "指标C", "指标D", "指标E" };
+        decimal[] schoolValues = { 82m, 91m, 76m, 68m, 88m };
+        decimal[] provinceValues = { 75m, 80m, 72m, 70m, 79m };
+        if (seriesLengthMismatch)
+            provinceValues = provinceValues[..4];
+
+        using MemoryStream stream = new();
+        using (WordprocessingDocument document = WordprocessingDocument.Create(
+                   stream,
+                   WordprocessingDocumentType.Document,
+                   true))
+        {
+            MainDocumentPart mainPart = document.AddMainDocumentPart();
+            ChartPart chartPart = mainPart.AddNewPart<ChartPart>();
+            string relationshipId = mainPart.GetIdOfPart(chartPart);
+            mainPart.Document = new Document(new Body(
+                new Paragraph(new Run(new Drawing(
+                    new DW.Inline(
+                        new DW.Extent { Cx = 5715000L, Cy = 3429000L },
+                        new DW.EffectExtent(),
+                        new DW.DocProperties { Id = 1U, Name = "Radar Chart 1" },
+                        new DW.NonVisualGraphicFrameDrawingProperties(
+                            new A.GraphicFrameLocks { NoChangeAspect = true }),
+                        new A.Graphic(
+                            new A.GraphicData(
+                                new C.ChartReference { Id = relationshipId })
+                            {
+                                Uri = "http://schemas.openxmlformats.org/drawingml/2006/chart",
+                            })))))));
+
+            C.RadarStyle style = new();
+            style.SetAttribute(new OpenXmlAttribute("val", string.Empty, radarStyle));
+            C.RadarChart radarChart = new(
+                style,
+                new C.VaryColors { Val = false },
+                CreateRadarSeries(
+                    0U,
+                    "学校值",
+                    categories,
+                    schoolValues,
+                    includeCategories,
+                    includeValueCache,
+                    C.MarkerStyleValues.Diamond),
+                CreateRadarSeries(
+                    1U,
+                    "全省值",
+                    categories,
+                    provinceValues,
+                    includeCategories,
+                    includeValueCache,
+                    C.MarkerStyleValues.Circle),
+                new C.AxisId { Val = 1U },
+                new C.AxisId { Val = 2U });
+
+            C.Scaling valueScaling = new(new C.Orientation
+            {
+                Val = C.OrientationValues.MinMax,
+            });
+            if (includeAxisRange)
+            {
+                valueScaling.Append(
+                    new C.MinAxisValue { Val = 0D },
+                    new C.MaxAxisValue { Val = 100D });
+            }
+
+            C.CategoryAxis categoryAxis = new(
+                new C.AxisId { Val = 1U },
+                new C.Scaling(new C.Orientation { Val = C.OrientationValues.MinMax }),
+                new C.AxisPosition { Val = C.AxisPositionValues.Bottom },
+                new C.CrossingAxis { Val = 2U });
+            C.ValueAxis valueAxis = new(
+                new C.AxisId { Val = 2U },
+                valueScaling,
+                new C.AxisPosition { Val = C.AxisPositionValues.Left },
+                new C.CrossingAxis { Val = 1U });
+
+            chartPart.ChartSpace = new C.ChartSpace(
+                new C.Chart(
+                    new C.Title(
+                        new C.ChartText(
+                            new C.RichText(
+                                new A.BodyProperties(),
+                                new A.ListStyle(),
+                                new A.Paragraph(new A.Run(new A.Text("雷达图标题")))))),
+                    new C.PlotArea(
+                        new C.Layout(),
+                        radarChart,
+                        categoryAxis,
+                        valueAxis),
+                    new C.Legend(
+                        new C.LegendPosition { Val = C.LegendPositionValues.Bottom })));
+            if (includeEmbeddedWorkbook)
+            {
+                EmbeddedPackagePart workbookPart = chartPart.AddEmbeddedPackagePart(
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+                string workbookRelationshipId = chartPart.GetIdOfPart(workbookPart);
+                WriteRadarWorkbook(
+                    workbookPart,
+                    categories,
+                    schoolValues,
+                    provinceValues);
+                chartPart.ChartSpace.Append(new C.ExternalData
+                {
+                    Id = workbookRelationshipId,
+                });
+            }
+            chartPart.ChartSpace.Save();
+            mainPart.Document.Save();
+        }
+
+        return stream.ToArray();
+    }
+
+    /// <summary>
     /// 读取第一个图表的分类和系列数值缓存。
     /// </summary>
     internal static (
@@ -281,6 +406,146 @@ internal static class OpenXmlTestDocumentFactory
                 new C.Formula($"Sheet1!${(char)('B' + index)}$2:${(char)('B' + index)}$3"),
                 valueCache)));
     }
+
+    private static C.RadarChartSeries CreateRadarSeries(
+        uint index,
+        string name,
+        IReadOnlyList<string> categories,
+        IReadOnlyList<decimal> values,
+        bool includeCategories,
+        bool includeValueCache,
+        C.MarkerStyleValues markerStyle)
+    {
+        C.StringCache nameCache = new(new C.PointCount { Val = 1U });
+        nameCache.Append(new C.StringPoint(new C.NumericValue(name)) { Index = 0U });
+
+        C.StringReference categoryReference = new(
+            new C.Formula($"RadarData!$B$1:${(char)('A' + categories.Count)}$1"));
+        if (includeCategories)
+        {
+            C.StringCache categoryCache = new(new C.PointCount { Val = (uint)categories.Count });
+            for (int pointIndex = 0; pointIndex < categories.Count; pointIndex++)
+            {
+                categoryCache.Append(new C.StringPoint(
+                    new C.NumericValue(categories[pointIndex]))
+                {
+                    Index = (uint)pointIndex,
+                });
+            }
+            categoryReference.Append(categoryCache);
+        }
+
+        C.NumberReference valueReference = new(
+            new C.Formula(
+                $"RadarData!$B${index + 2}:${(char)('A' + categories.Count)}${index + 2}"));
+        if (includeValueCache)
+        {
+            C.NumberingCache valueCache = new(
+                new C.FormatCode("General"),
+                new C.PointCount { Val = (uint)values.Count });
+            for (int pointIndex = 0; pointIndex < values.Count; pointIndex++)
+            {
+                valueCache.Append(new C.NumericPoint(
+                    new C.NumericValue(values[pointIndex].ToString(
+                        System.Globalization.CultureInfo.InvariantCulture)))
+                {
+                    Index = (uint)pointIndex,
+                });
+            }
+            valueReference.Append(valueCache);
+        }
+
+        C.ChartShapeProperties shape = new(
+            new A.SolidFill(new A.RgbColorModelHex
+            {
+                Val = index == 0U ? "4472C4" : "ED7D31",
+            }),
+            new A.Outline(
+                new A.SolidFill(new A.RgbColorModelHex
+                {
+                    Val = index == 0U ? "4472C4" : "ED7D31",
+                })));
+
+        return new C.RadarChartSeries(
+            new C.Index { Val = index },
+            new C.Order { Val = index },
+            new C.SeriesText(new C.StringReference(
+                new C.Formula($"RadarData!$A${index + 2}"),
+                nameCache)),
+            shape,
+            new C.Marker(new C.Symbol { Val = markerStyle }, new C.Size { Val = 6 }),
+            new C.CategoryAxisData(categoryReference),
+            new C.Values(valueReference));
+    }
+
+    private static void WriteRadarWorkbook(
+        EmbeddedPackagePart packagePart,
+        IReadOnlyList<string> categories,
+        IReadOnlyList<decimal> schoolValues,
+        IReadOnlyList<decimal> provinceValues)
+    {
+        using Stream workbookStream = packagePart.GetStream(FileMode.Create, FileAccess.ReadWrite);
+        using SpreadsheetDocument spreadsheet = SpreadsheetDocument.Create(
+            workbookStream,
+            SpreadsheetDocumentType.Workbook,
+            true);
+        WorkbookPart workbookPart = spreadsheet.AddWorkbookPart();
+        WorksheetPart worksheetPart = workbookPart.AddNewPart<WorksheetPart>();
+        S.SheetData sheetData = new();
+        worksheetPart.Worksheet = new S.Worksheet(sheetData);
+
+        S.Row header = new() { RowIndex = 1U };
+        for (int index = 0; index < categories.Count; index++)
+        {
+            header.Append(CreateSpreadsheetCell(
+                $"{(char)('B' + index)}1",
+                categories[index],
+                S.CellValues.String));
+        }
+        sheetData.Append(header);
+
+        sheetData.Append(CreateRadarWorkbookRow(2U, "学校值", schoolValues));
+        sheetData.Append(CreateRadarWorkbookRow(3U, "全省值", provinceValues));
+
+        string worksheetRelationshipId = workbookPart.GetIdOfPart(worksheetPart);
+        workbookPart.Workbook = new S.Workbook(
+            new S.Sheets(
+                new S.Sheet
+                {
+                    Id = worksheetRelationshipId,
+                    SheetId = 1U,
+                    Name = "RadarData",
+                }));
+        worksheetPart.Worksheet.Save();
+        workbookPart.Workbook.Save();
+    }
+
+    private static S.Row CreateRadarWorkbookRow(
+        uint rowIndex,
+        string name,
+        IReadOnlyList<decimal> values)
+    {
+        S.Row row = new() { RowIndex = rowIndex };
+        row.Append(CreateSpreadsheetCell($"A{rowIndex}", name, S.CellValues.String));
+        for (int index = 0; index < values.Count; index++)
+        {
+            row.Append(CreateSpreadsheetCell(
+                $"{(char)('B' + index)}{rowIndex}",
+                values[index].ToString(System.Globalization.CultureInfo.InvariantCulture),
+                S.CellValues.Number));
+        }
+        return row;
+    }
+
+    private static S.Cell CreateSpreadsheetCell(
+        string reference,
+        string value,
+        S.CellValues type) => new()
+    {
+        CellReference = reference,
+        DataType = type,
+        CellValue = new S.CellValue(value),
+    };
 
     /// <summary>
     /// 读取 DOCX 主文档正文的可见拼接文本。

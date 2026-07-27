@@ -51,8 +51,11 @@ internal static class ChartDataTableBuilder
             });
         }
 
-        int rowCount = categories.Count > 0 ? categories.Count
-            : series.Max(s => s.Values.Count);
+        int rowCount = categories.Count > 0
+            ? categories.Count
+            : series.Count == 0
+                ? 0
+                : series.Max(s => s.Values.Count);
 
         List<ChartDataRowSnapshot> rows = new(rowCount);
         for (int i = 0; i < rowCount; i++)

@@ -103,8 +103,10 @@ export interface ChartSeriesDef {
   seriesKey: string;
   name: string;
   nameFormula: string | null;
+  nameSheetName: string | null;
   nameCell: string | null;
   valueFormula: string | null;
+  valueSheetName: string | null;
   valueStartCell: string | null;
   valueEndCell: string | null;
   values: Array<number | null>;
@@ -175,6 +177,8 @@ export interface ChartDefinitionSnapshot {
   typeLabel: string;
   title: string | null;
   supportedForBinding: boolean;
+  radarMinimum: number | null;
+  radarMaximum: number | null;
   widthEmu: number;
   heightEmu: number;
 }
@@ -185,6 +189,7 @@ export interface ChartPlotGroupSnapshot {
   type: string;
   grouping: string | null;
   barDirection: string | null;
+  radarStyle: string | null;
   seriesKeys: string[];
   axisIds: string[];
 }
@@ -377,6 +382,7 @@ export interface TemplateRecord {
 export interface TemplateElementRecord {
   id: string;
   templateVersionId: string;
+  segmentId: string | null;
   elementKey: string;
   elementType: "TEXT" | "CHART" | string;
   locatorType: string;
@@ -386,8 +392,48 @@ export interface TemplateElementRecord {
   defaultValue: unknown;
   isRequired: boolean;
   sortNo: number;
+  segmentLocalOrder: number;
   parseStatus: string;
   parseMessage: string | null;
+}
+
+export interface TemplateSegmentRecord {
+  id: string;
+  templateVersionId: string;
+  parentSegmentId: string | null;
+  segmentKey: string;
+  segmentName: string;
+  segmentType: string;
+  anchorType: string;
+  documentOrderStart: number;
+  documentOrderEnd: number;
+  segmentStatus: string;
+  previewStatus: string;
+  previewErrorMessage: string | null;
+  sortNo: number;
+  elementCount: number;
+  bindingProgress: {
+    total: number;
+    bound: number;
+    requiredMissing: number;
+  };
+  rowVersion: number;
+}
+
+export interface TemplateOutlineBlock {
+  blockId: string;
+  blockType: string;
+  displayText: string;
+  segmentKey: string | null;
+  canSelect: boolean;
+  depth: number;
+  children: TemplateOutlineBlock[];
+}
+
+export interface TemplateSegmentOutline {
+  templateVersionId: string;
+  contentHash: string;
+  blocks: TemplateOutlineBlock[];
 }
 
 export interface TemplateVersionView {

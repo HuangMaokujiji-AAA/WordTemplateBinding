@@ -88,4 +88,47 @@ describe("rendered chart bindings", () => {
     expect(result.renderedCount).toBe(0);
     expect(result.unresolvedLocatorIds).toEqual(["chart-locator-1"]);
   });
+
+  it("shows the specific radar structural diagnostic for a damaged chart", () => {
+    const container = document.createElement("div");
+    container.innerHTML = `
+      <span
+        class="docx-chart-slot template-chart-target"
+        data-chart-part-key="/word/charts/chart1.xml"
+        data-chart-locator-id="chart-locator-1"
+      ></span>
+    `;
+    const chart = createChart({
+      chartType: "radar",
+      isBindable: false,
+      dataDefinition: {
+        schemaVersion: "1.0",
+        locatorId: "chart-locator-1",
+        partKey: "/word/charts/chart1.xml",
+        relationshipId: "rId7",
+        documentOrder: 0,
+        chartType: "radar",
+        dataMode: "category-series",
+        category: {
+          name: "分类", formula: null, sheetName: null,
+          startCell: null, endCell: null, values: [],
+        },
+        series: [],
+        currentData: [],
+        writeCapability: "unsupported",
+        diagnostics: [{
+          code: "radar_missing_categories",
+          level: "warning",
+          message: "雷达图没有分类指标。",
+          path: null,
+          seriesIndex: null,
+          recoverable: true,
+        }],
+      },
+    });
+
+    refreshChartBindingTargetStates(container, [chart]);
+    expect(container.querySelector<HTMLElement>(".docx-chart-slot")!.title)
+      .toContain("雷达图没有分类指标");
+  });
 });

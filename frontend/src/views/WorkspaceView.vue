@@ -15,14 +15,19 @@ import {
   getBindingPreview,
   getOrCreateBindingSet,
   getPersistentSchema,
-  getTemplateVersionFile,
+  getTemplateSegmentPreview,
+  getTemplateSegmentOutline,
   hydrateTemplateResponse,
   listBindingItems,
   listChapters,
   listDataSources,
   listPersistentTemplates,
+  listTemplateSegmentElements,
+  listTemplateSegments,
+  insertTemplateSegmentBoundary,
   listProjects,
   refreshDataSource,
+  removeTemplateSegmentBoundary,
   rescanTemplateVersion,
   uploadPersistentTemplate,
   upsertPersistentBinding,
@@ -37,7 +42,11 @@ import type {
   MockItem,
   ProjectRecord,
   TemplateRecord,
+  TemplateElementRecord,
+  TemplateOutlineBlock,
   TemplateResponse,
+  TemplateSegmentRecord,
+  TemplateSegmentOutline,
   TemplateVersionView,
 } from "../api/types";
 import DocxUploadPanel from "../components/DocxUploadPanel.vue";
@@ -81,6 +90,15 @@ const selectedProjectId = ref("");
 const selectedChapterId = ref("");
 const selectedDataSourceId = ref("");
 const selectedTemplateId = ref("");
+const segments = ref<TemplateSegmentRecord[]>([]);
+const selectedSegmentId = ref("");
+const segmentElements = ref<TemplateElementRecord[]>([]);
+const segmentOutline = ref<TemplateSegmentOutline | null>(null);
+const boundaryManagerVisible = ref(false);
+const boundaryKey = ref("");
+const boundaryName = ref("");
+const boundaryStartBlockId = ref("");
+const boundaryEndBlockId = ref("");
 const bindingSetId = ref("");
 const bindingPreview = ref("");
 const schemaQuery = ref("");
@@ -150,6 +168,24 @@ const workspaceTabs: ReadonlyArray<readonly [WorkspaceTab, string]> = [
   ["properties", "属性"],
   ["chart-structure", "图表结构"],
 ];
+const outlineBlocks = computed(() => {
+  const flatten = (items: TemplateOutlineBlock[]): TemplateOutlineBlock[] =>
+    items.flatMap(item => [item, ...flatten(item.children)]);
+  return flatten(segmentOutline.value?.blocks ?? []);
+});
+const selectableOutlineBlocks = computed(() =>
+  outlineBlocks.value.filter(item => item.canSelect)
+);
+const boundaryEndBlocks = computed(() => {
+  const start = selectableOutlineBlocks.value.find(
+    item => item.blockId === boundaryStartBlockId.value
+  );
+  if (!start) return selectableOutlineBlocks.value;
+  const parentPath = start.blockId.slice(0, start.blockId.lastIndexOf("/"));
+  return selectableOutlineBlocks.value.filter(item =>
+    item.blockId.slice(0, item.blockId.lastIndexOf("/")) === parentPath
+  );
+});
 
 let renderTaskId = 0;
 let searchTimer: ReturnType<typeof setTimeout> | undefined;
@@ -161,6 +197,14 @@ onMounted(() => {
 watch(schemaQuery, (query) => {
   if (searchTimer) clearTimeout(searchTimer);
   searchTimer = setTimeout(() => void loadSchema(query), 280);
+});
+
+watch(boundaryStartBlockId, () => {
+  if (!boundaryEndBlocks.value.some(
+    item => item.blockId === boundaryEndBlockId.value
+  )) {
+    boundaryEndBlockId.value = boundaryEndBlocks.value[0]?.blockId || "";
+  }
 });
 
 watch(selectedProjectId, () => {
@@ -187,6 +231,22 @@ function createEmptyChartStats() {
   };
 }
 
+function segmentIndent(segment: TemplateSegmentRecord): string {
+  let depth = 0;
+  let parentId = segment.parentSegmentId;
+  const visited = new Set<string>();
+  while (parentId && !visited.has(parentId)) {
+    visited.add(parentId);
+    depth += 1;
+    parentId = segments.value.find(item => item.id === parentId)?.parentSegmentId || null;
+  }
+  return `${0.75 + depth}rem`;
+}
+
+function outlineLabel(block: TemplateOutlineBlock): string {
+  return `${"　".repeat(block.depth)}${block.displayText}`;
+}
+
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -203,7 +263,7 @@ function handleProgress(progress: DocxProcessProgress): void {
 }
 
 async function handleFileSelected(file: File): Promise<void> {
-  const taskId = ++renderTaskId;
+  ++renderTaskId;
   cleanupPreview();
   resetTemplateState();
 
@@ -214,101 +274,19 @@ async function handleFileSelected(file: File): Promise<void> {
   loadingMessage.value = "正在上传并解析模板…";
   setStatus("正在上传并解析模板…");
 
-  await nextTick();
-  const containers = getViewerContainers();
-  if (!containers) {
-    setStatus("文档预览容器未就绪。", true);
-    loading.value = false;
-    return;
-  }
-
-  const uploadPromise = uploadPersistentTemplate(
-    file,
-    selectedTemplateId.value || null
-  );
-  const previewPromise = processDocx(file, {
-    ...containers,
-    onProgress: handleProgress,
-  });
-
   try {
-    const [uploadResult, previewResult] = await Promise.allSettled([
-      uploadPromise,
-      previewPromise,
-    ]);
-    if (taskId !== renderTaskId) return;
-
-    if (previewResult.status === "fulfilled") {
-      chartStats.value = {
-        totalCharts: previewResult.value.totalCharts,
-        renderedCharts: previewResult.value.renderedCharts,
-        partiallyRenderedCharts: previewResult.value.partiallyRenderedCharts,
-        unsupportedCharts: previewResult.value.unsupportedCharts,
-        failedCharts: previewResult.value.failedCharts,
-        charts: previewResult.value.charts,
-      };
-      parsedCharts.value = previewResult.value.charts
-        .map((c) => c.model)
-        .filter((m): m is ParsedWordChart => m !== null);
-    }
-
-    if (uploadResult.status === "rejected") {
-      throw uploadResult.reason;
-    }
-
-    versionView.value = uploadResult.value;
-    selectedTemplateId.value = uploadResult.value.template.id;
-    await refreshBindingContext();
-    template.value = hydrateTemplateResponse(
-      uploadResult.value,
-      bindingSetId.value
-        ? await listBindingItems(bindingSetId.value)
-        : []
+    const uploadResult = await uploadPersistentTemplate(
+      file,
+      selectedTemplateId.value || null
     );
+    versionView.value = uploadResult;
+    selectedTemplateId.value = uploadResult.template.id;
     await refreshTemplateCatalog();
-    const decoration = decorateRenderedDocument(
-      containers.documentContainer,
-      template.value.mockItems,
-      {
-        onSelect: selectMockItem,
-        onBind: (locatorId, field) => void bindField(locatorId, field),
-        onError: (message) => setStatus(message, true),
-      }
-    );
-    renderedLocatorCount.value = decoration.renderedCount;
-    unresolvedLocatorIds.value = decoration.unresolvedLocatorIds;
-    const chartDecoration = decorateRenderedCharts(
-      containers.documentContainer,
-      template.value.charts,
-      {
-        onSelect: selectChart,
-        onBind: (locatorId, field) => void bindField(locatorId, field),
-        onError: (message) => setStatus(message, true),
-      }
-    );
-    renderedChartCount.value = chartDecoration.renderedCount;
-    unresolvedChartIds.value = chartDecoration.unresolvedLocatorIds;
-
-    const unresolvedCount = decoration.unresolvedLocatorIds.length
-      + chartDecoration.unresolvedLocatorIds.length;
-    const unresolvedNote = unresolvedCount
-      ? `，${unresolvedCount} 项需从左侧列表选择`
-      : "";
-    setStatus(
-      buildUploadStatus(
-        template.value,
-        decoration.renderedCount + chartDecoration.renderedCount,
-        unresolvedNote
-      )
-    );
+    await loadSegmentsAndSelect();
   } catch (error) {
-    if (taskId === renderTaskId) {
-      setStatus(errorMessage(error), true);
-    }
+    setStatus(errorMessage(error), true);
   } finally {
-    if (taskId === renderTaskId) {
-      loading.value = false;
-    }
+    loading.value = false;
   }
 }
 
@@ -336,7 +314,7 @@ async function handleRescan(): Promise<void> {
 
   await runAction("正在从后端保存的原始 DOCX 重新扫描…", async () => {
     versionView.value = await rescanTemplateVersion(versionView.value!.version.id);
-    await refreshTemplateBindings();
+    await loadSegmentsAndSelect();
     syncSelection();
     refreshRenderedBindings();
     const importSummary = template.value?.importSummary;
@@ -417,15 +395,6 @@ async function handleExportReusable(): Promise<void> {
     const exportedName = await downloadBindingSetReusableTemplate(bindingSetId.value);
     setStatus(`复用模板已导出：${exportedName}`);
   });
-}
-
-function buildUploadStatus(
-  currentTemplate: TemplateResponse,
-  renderedCount: number,
-  unresolvedPreviewNote: string
-): string {
-  const summary = currentTemplate.importSummary;
-  return `已识别 ${currentTemplate.mockItemCount} 个模拟值和 ${currentTemplate.chartCount} 个图表，网页已定位 ${renderedCount} 项${formatImportSummary(summary)}${unresolvedPreviewNote}`;
 }
 
 async function bindField(
@@ -552,6 +521,9 @@ function handleClear(): void {
   fileSize.value = "";
   documentVisible.value = false;
   selectedTemplateId.value = "";
+  const workspaceUrl = new URL(window.location.href);
+  workspaceUrl.searchParams.delete("segmentId");
+  window.history.replaceState(null, "", workspaceUrl);
   setStatus("就绪");
 }
 
@@ -568,6 +540,15 @@ function resetTemplateState(): void {
   renderedChartCount.value = 0;
   unresolvedLocatorIds.value = [];
   unresolvedChartIds.value = [];
+  segments.value = [];
+  selectedSegmentId.value = "";
+  segmentElements.value = [];
+  segmentOutline.value = null;
+  boundaryManagerVisible.value = false;
+  boundaryKey.value = "";
+  boundaryName.value = "";
+  boundaryStartBlockId.value = "";
+  boundaryEndBlockId.value = "";
 }
 
 function cleanupPreview(): void {
@@ -664,10 +645,131 @@ async function handleTemplateSelected(): Promise<void> {
   try {
     const view = await getCurrentTemplateVersion(selectedTemplateId.value);
     versionView.value = view;
-    const file = await getTemplateVersionFile(
-      view.version.id,
-      view.file.originalName
+    if (taskId !== renderTaskId) return;
+    await loadSegmentsAndSelect();
+  } catch (error) {
+    setStatus(errorMessage(error), true);
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function loadSegmentsAndSelect(): Promise<void> {
+  if (!versionView.value) return;
+  await refreshBindingContext();
+  const response = await listTemplateSegments(
+    versionView.value.version.id,
+    bindingSetId.value || undefined
+  );
+  segments.value = response.items;
+  const requestedSegmentId = new URL(window.location.href)
+    .searchParams.get("segmentId");
+  selectedSegmentId.value = response.items.some(
+    item => item.id === requestedSegmentId
+  )
+    ? requestedSegmentId!
+    : response.items[0]?.id || "";
+  if (!selectedSegmentId.value) {
+    throw new Error("模板没有可用片段，请检查片段解析诊断。");
+  }
+  await loadSelectedSegment();
+}
+
+async function toggleBoundaryManager(): Promise<void> {
+  boundaryManagerVisible.value = !boundaryManagerVisible.value;
+  if (boundaryManagerVisible.value && !segmentOutline.value) {
+    await loadBoundaryOutline();
+  }
+}
+
+async function loadBoundaryOutline(): Promise<void> {
+  if (!versionView.value) return;
+  segmentOutline.value = await getTemplateSegmentOutline(
+    versionView.value.version.id
+  );
+  const selectable = selectableOutlineBlocks.value;
+  boundaryStartBlockId.value = selectable[0]?.blockId || "";
+  boundaryEndBlockId.value = selectable[0]?.blockId || "";
+}
+
+async function handleInsertBoundary(): Promise<void> {
+  if (
+    !versionView.value ||
+    !segmentOutline.value ||
+    !boundaryKey.value.trim() ||
+    !boundaryName.value.trim() ||
+    !boundaryStartBlockId.value ||
+    !boundaryEndBlockId.value
+  ) {
+    setStatus("请填写片段名称、片段键并选择起止块。", true);
+    return;
+  }
+
+  await runAction("正在创建包含新边界的模板版本…", async () => {
+    const edited = await insertTemplateSegmentBoundary(
+      versionView.value!.version.id,
+      {
+        segmentKey: boundaryKey.value.trim(),
+        segmentName: boundaryName.value.trim(),
+        startBlockId: boundaryStartBlockId.value,
+        endBlockId: boundaryEndBlockId.value,
+        expectedContentHash: segmentOutline.value!.contentHash,
+      }
     );
+    versionView.value = edited;
+    boundaryKey.value = "";
+    boundaryName.value = "";
+    segmentOutline.value = null;
+    await refreshTemplateCatalog();
+    await loadSegmentsAndSelect();
+    await loadBoundaryOutline();
+    setStatus(`拆分边界已写入新模板版本 v${edited.version.versionNo}。`);
+  });
+}
+
+async function handleRemoveBoundary(segment: TemplateSegmentRecord): Promise<void> {
+  if (!versionView.value || segment.anchorType !== "CONTENT_CONTROL") return;
+  if (!window.confirm(
+    `确定取消“${segment.segmentName}”的拆分边界吗？正文内容会完整保留，并创建新模板版本。`
+  )) return;
+
+  await runAction("正在创建取消边界后的模板版本…", async () => {
+    if (!segmentOutline.value) await loadBoundaryOutline();
+    const edited = await removeTemplateSegmentBoundary(
+      versionView.value!.version.id,
+      segment.segmentKey,
+      segmentOutline.value!.contentHash
+    );
+    versionView.value = edited;
+    segmentOutline.value = null;
+    await refreshTemplateCatalog();
+    await loadSegmentsAndSelect();
+    await loadBoundaryOutline();
+    setStatus(`边界已取消，正文已保留在新模板版本 v${edited.version.versionNo}。`);
+  });
+}
+
+async function loadSelectedSegment(): Promise<void> {
+  if (!versionView.value || !selectedSegmentId.value) return;
+  const workspaceUrl = new URL(window.location.href);
+  workspaceUrl.searchParams.set("segmentId", selectedSegmentId.value);
+  window.history.replaceState(null, "", workspaceUrl);
+  const taskId = ++renderTaskId;
+  cleanupPreview();
+  documentVisible.value = true;
+  loading.value = true;
+  loadingMessage.value = "正在加载当前片段预览…";
+  try {
+    const current = segments.value.find(item => item.id === selectedSegmentId.value);
+    const [file, elements] = await Promise.all([
+      getTemplateSegmentPreview(
+        selectedSegmentId.value,
+        `${current?.segmentKey || "segment"}-preview.docx`
+      ),
+      listTemplateSegmentElements(selectedSegmentId.value),
+    ]);
+    if (taskId !== renderTaskId) return;
+    segmentElements.value = elements;
     fileName.value = file.name;
     fileSize.value = formatFileSize(file.size);
     await nextTick();
@@ -687,16 +789,16 @@ async function handleTemplateSelected(): Promise<void> {
       charts: previewResult.charts,
     };
     parsedCharts.value = previewResult.charts
-      .map((chart) => chart.model)
+      .map(chart => chart.model)
       .filter((model): model is ParsedWordChart => model !== null);
     await refreshBindingContext();
     await refreshTemplateBindings();
     decorateCurrentTemplate(containers.documentContainer);
-    setStatus(`已加载模板 ${view.template.templateName} v${view.version.versionNo}。`);
+    setStatus(`已加载片段：${current?.segmentName || selectedSegmentId.value}。`);
   } catch (error) {
-    setStatus(errorMessage(error), true);
+    if (taskId === renderTaskId) setStatus(errorMessage(error), true);
   } finally {
-    loading.value = false;
+    if (taskId === renderTaskId) loading.value = false;
   }
 }
 
@@ -715,7 +817,16 @@ async function refreshTemplateBindings(): Promise<void> {
   const items = bindingSetId.value
     ? await listBindingItems(bindingSetId.value)
     : [];
-  template.value = hydrateTemplateResponse(versionView.value, items);
+  template.value = hydrateTemplateResponse(
+    { ...versionView.value, elements: segmentElements.value },
+    items
+  );
+  if (segments.value.length > 0) {
+    segments.value = (await listTemplateSegments(
+      versionView.value.version.id,
+      bindingSetId.value || undefined
+    )).items;
+  }
 }
 
 function decorateCurrentTemplate(container: HTMLElement): void {
@@ -904,6 +1015,105 @@ function partLabel(item: MockItem): string {
 
     <div class="workspace">
       <aside class="workspace-panel left-panel">
+        <section class="panel-section">
+          <div class="segment-panel-heading">
+            <h2>模板片段</h2>
+            <button
+              type="button"
+              class="segment-manage-toggle"
+              :disabled="!versionView || loading"
+              @click="toggleBoundaryManager"
+            >
+              {{ boundaryManagerVisible ? "收起边界管理" : "管理拆分边界" }}
+            </button>
+          </div>
+          <div v-if="boundaryManagerVisible" class="boundary-manager">
+            <p class="boundary-note">
+              选择同一层级的连续块。保存或删除边界都会创建新的模板版本。
+            </p>
+            <label>
+              <span>片段名称</span>
+              <input v-model="boundaryName" maxlength="255" placeholder="例如：专业监测结果" />
+            </label>
+            <label>
+              <span>片段键</span>
+              <input
+                v-model="boundaryKey"
+                maxlength="128"
+                placeholder="例如：major-monitoring"
+              />
+            </label>
+            <label>
+              <span>起始块</span>
+              <select v-model="boundaryStartBlockId">
+                <option
+                  v-for="block in selectableOutlineBlocks"
+                  :key="block.blockId"
+                  :value="block.blockId"
+                >
+                  {{ outlineLabel(block) }}
+                </option>
+              </select>
+            </label>
+            <label>
+              <span>结束块</span>
+              <select v-model="boundaryEndBlockId">
+                <option
+                  v-for="block in boundaryEndBlocks"
+                  :key="block.blockId"
+                  :value="block.blockId"
+                >
+                  {{ outlineLabel(block) }}
+                </option>
+              </select>
+            </label>
+            <button
+              type="button"
+              class="boundary-create"
+              :disabled="loading || selectableOutlineBlocks.length === 0"
+              @click="handleInsertBoundary"
+            >
+              插入拆分边界并创建新版本
+            </button>
+            <div
+              v-if="segments.some(item => item.anchorType === 'CONTENT_CONTROL')"
+              class="boundary-existing"
+            >
+              <strong>已有边界</strong>
+              <button
+                v-for="segment in segments.filter(
+                  item => item.anchorType === 'CONTENT_CONTROL'
+                )"
+                :key="`remove-${segment.id}`"
+                type="button"
+                :disabled="loading"
+                @click="handleRemoveBoundary(segment)"
+              >
+                删除 {{ segment.segmentName }}
+              </button>
+            </div>
+          </div>
+          <p v-if="segments.length === 0" class="empty-state">选择模板后显示片段</p>
+          <div v-else class="segment-tree" role="tree">
+            <button
+              v-for="segment in segments"
+              :key="segment.id"
+              type="button"
+              role="treeitem"
+              class="segment-tree-item"
+              :class="{ 'is-selected': segment.id === selectedSegmentId }"
+              :style="{ paddingLeft: segmentIndent(segment) }"
+              :disabled="loading"
+              @click="selectedSegmentId = segment.id; loadSelectedSegment()"
+            >
+              <span>{{ segment.segmentName }}</span>
+              <small>
+                {{ segment.bindingProgress.bound }}/{{ segment.bindingProgress.total }}
+                · {{ segment.previewStatus }}
+              </small>
+            </button>
+          </div>
+        </section>
         <section class="panel-section">
           <h2>模板状态</h2>
           <dl class="metadata">
@@ -1100,3 +1310,100 @@ function partLabel(item: MockItem): string {
     <LoadingOverlay :visible="loading" :message="loadingMessage" />
   </div>
 </template>
+
+<style scoped>
+.segment-panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.segment-panel-heading h2 {
+  margin: 0;
+}
+
+.segment-manage-toggle,
+.boundary-create,
+.boundary-existing button {
+  border: 1px solid #94a3b8;
+  border-radius: 0.4rem;
+  background: #fff;
+  padding: 0.4rem 0.6rem;
+}
+
+.boundary-manager {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0.75rem 0;
+  padding: 0.75rem;
+  border: 1px solid #bfdbfe;
+  border-radius: 0.55rem;
+  background: #f8fbff;
+}
+
+.boundary-manager label {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.boundary-manager input,
+.boundary-manager select {
+  min-width: 0;
+  width: 100%;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.35rem;
+  padding: 0.45rem;
+}
+
+.boundary-note {
+  margin: 0;
+  color: #475569;
+  font-size: 0.82rem;
+}
+
+.boundary-create {
+  border-color: #2563eb;
+  background: #2563eb;
+  color: #fff;
+}
+
+.boundary-existing {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.boundary-existing button {
+  border-color: #fca5a5;
+  color: #b91c1c;
+  text-align: left;
+}
+
+.segment-tree {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.segment-tree-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border: 1px solid var(--border-color, #d9dee8);
+  border-radius: 0.45rem;
+  background: transparent;
+  padding: 0.55rem 0.75rem;
+  text-align: left;
+}
+
+.segment-tree-item.is-selected {
+  border-color: #2563eb;
+  background: #eff6ff;
+}
+
+.segment-tree-item small {
+  white-space: nowrap;
+  color: #64748b;
+}
+</style>
