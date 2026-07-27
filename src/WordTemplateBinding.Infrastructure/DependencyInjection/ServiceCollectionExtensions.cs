@@ -7,6 +7,10 @@ using WordTemplateBinding.Core.Services;
 using WordTemplateBinding.Infrastructure.Database;
 using WordTemplateBinding.Infrastructure.DataSchema;
 using WordTemplateBinding.Infrastructure.OpenXml;
+using WordTemplateBinding.Infrastructure.OpenXml.Cloning;
+using WordTemplateBinding.Infrastructure.OpenXml.Conditions;
+using WordTemplateBinding.Infrastructure.OpenXml.Data;
+using WordTemplateBinding.Infrastructure.OpenXml.Repeats;
 using WordTemplateBinding.Infrastructure.OpenXml.Segments;
 using WordTemplateBinding.Infrastructure.Stores;
 
@@ -133,6 +137,12 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ITemplateElementIdentityResolver, TemplateElementIdentityResolver>();
         services.AddSingleton<IWordReportRenderer, WordReportRenderer>();
         services.AddSingleton<IWordReusableTemplateRenderer, WordReusableTemplateRenderer>();
+        services.AddSingleton<IDataContextResolver, JsonDataContextResolver>();
+        services.AddSingleton<IConditionEvaluator, ConditionEvaluator>();
+        services.AddSingleton<OpenXmlRuntimeLocatorBuilder>();
+        services.AddSingleton<OpenXmlRepeatRowExpander>();
+        services.AddSingleton<OpenXmlRepeatBlockExpander>();
+        services.AddSingleton<OpenXmlConditionalBlockProcessor>();
         services.AddSingleton<
             IDataConnectionCredentialResolver,
             ConfigurationDataConnectionCredentialResolver>();

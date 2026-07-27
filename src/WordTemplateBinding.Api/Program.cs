@@ -31,10 +31,11 @@ if (string.Equals(
         persistenceOptions.Mode,
         "InMemory",
         StringComparison.OrdinalIgnoreCase) &&
-    !builder.Environment.IsEnvironment("Testing"))
+    !builder.Environment.IsEnvironment("Testing") &&
+    !builder.Environment.IsDevelopment())
 {
     throw new InvalidOperationException(
-        "InMemory 持久化仅允许自动化测试使用；实际运行请配置 Persistence:Mode=MySql。");
+        "InMemory 持久化仅允许开发环境和自动化测试使用；实际运行请配置 Persistence:Mode=MySql。");
 }
 
 builder.Services.Configure<FormOptions>(options =>
@@ -91,6 +92,7 @@ if (string.Equals(
     app.MapChartAnalysisEndpoints();
 }
 
+app.MapDemoEndpoints();
 app.MapDatabaseEndpoints();
 app.Run();
 
