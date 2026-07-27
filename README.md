@@ -6,9 +6,28 @@ Vue 3 和 MySQL 8 的 Word 模板数据绑定平台。
 支持上传 DOCX、识别可绑定元素、预览 Word 原生图表、管理模板版本、项目管理、
 章节管理、测试 JSON 数据源、配置字段绑定，并生成报告或导出可复用模板。
 
-## 1. 快速启动
+## 1. 产品定位与改造方向
 
-### 1.1 环境要求
+系统围绕两个核心任务逐步重组：
+
+1. **制作可复用报告模板**：创建模板、确认结构、标记动态内容、设置区块规则、连接数据、绑定、校验、测试和发布。
+2. **使用模板批量生成报告**：选择已发布模板、年度和范围，设置输出规则，完成生成前检查和样例确认，再批量生成、下载和追踪记录。
+
+目标一级业务入口：
+
+- **模板制作中心**
+- **报告生成中心**
+
+当前版本仍保留“项目管理、模板管理、模板绑定”入口。改造采用渐进迁移方式，不重写项目、不更换 Vue 3、ASP.NET Core、Open XML SDK 或 MySQL，也不会在新流程稳定前删除旧路由和接口。
+
+详细计划和改造前基线：
+
+- [两大中心项目改造计划](plan/04-two-center-project-refactoring-plan.md)
+- [两大中心改造基线](docs/refactor-baseline.md)
+
+## 2. 快速启动
+
+### 2.1 环境要求
 
 - .NET SDK 7.0
 - MySQL 8.0+（已初始化 `report_platform` 数据库）
@@ -21,7 +40,7 @@ dotnet --version   # 7.0.x
 node --version     # 20+（可选）
 ```
 
-### 1.2 初始化数据库
+### 2.2 初始化数据库
 
 首次使用前，在 MySQL 中执行建表脚本：
 
@@ -33,7 +52,7 @@ source sql/report_platform_v2_schema.sql;
 source sql/report_platform_v2_to_v2_1_database_file_storage_migration.sql;
 ```
 
-### 1.3 配置数据库连接
+### 2.3 配置数据库连接
 
 实际运行固定使用 MySQL。不要把真实地址、账号或密码写入
 `src/WordTemplateBinding.Api/appsettings.json`，开发机使用 .NET User Secrets：
@@ -59,7 +78,7 @@ dotnet user-secrets set "ApplicationIdentity:DefaultActorUserId" "1" `
 `Required` 或使用更严格的证书校验。生产部署应使用部署平台的密钥管理器和
 `Database__Host`、`Database__Password` 等环境变量。
 
-### 1.4 启动
+### 2.4 启动
 
 ```powershell
 cd D:\Code\WordTemplateBinding
@@ -84,7 +103,7 @@ Invoke-RestMethod "http://127.0.0.1:5080/api/system/database/health"
 返回的 `status` 必须是 `healthy`，`database` 必须是 `report_platform`。模板、
 文件分片、项目、章节、数据源、快照和绑定都会写入该数据库；应用重启后数据仍然存在。
 
-### 1.5 首次使用流程
+### 2.5 当前版本首次使用流程
 
 1. 打开 **项目管理** → 点击 **新建项目**
 2. 填写项目编码和名称，保持默认勾选“创建默认章节”和“初始化测试 JSON 数据”
@@ -95,19 +114,20 @@ Invoke-RestMethod "http://127.0.0.1:5080/api/system/database/health"
 7. 从左侧字段树拖拽字段到文档黄色高亮区域完成绑定
 8. 点击 **生成测试报告** 导出 DOCX
 
-## 2. 构建和测试
+## 3. 构建和测试
 
 ```powershell
 # 后端
 dotnet restore
 dotnet build
-dotnet test                                      # 110 单元测试 + 12 集成测试
+dotnet test                                      # 当前基线：159 单元测试 + 14 集成测试
 
 # 前端（修改前端代码后）
 cd frontend
 npm ci
 npm run typecheck
-npm test                                         # 139 前端测试
+npm test                                         # 当前基线：156 前端测试
+npm run test:e2e                                # 2 条核心旅程，需要本机 Google Chrome
 npm run build                                    # 构建到 wwwroot
 cd ..
 ```
@@ -115,12 +135,14 @@ cd ..
 > 自动化测试通过专用 `integration.runsettings` 使用隔离的 InMemory 仓储，不会连接、
 > 读取或修改真实 MySQL。该设置只作用于测试进程；`dotnet run` 始终使用 MySQL。
 
-## 3. 前端热更新开发
+## 4. 前端热更新开发
 
 窗口 A — 后端：
 
 ```powershell
 dotnet run --project .\src\WordTemplateBinding.Api
+
+mac：dotnet run --project ./src/WordTemplateBinding.Api
 ```
 
 窗口 B — Vite：
@@ -133,7 +155,7 @@ npm run dev
 
 访问 `http://127.0.0.1:5173`，Vite 自动代理 `/api` 到后端 5080。
 
-## 4. 页面结构
+## 5. 当前页面结构
 
 | 路由               | 页面     | 功能                                        |
 | ------------------ | -------- | ------------------------------------------- |
@@ -143,7 +165,7 @@ npm run dev
 | `/templates/:id` | 模板详情 | 模板编辑、版本管理、上传新版本、下载/重扫   |
 | `/workspace`     | 模板绑定 | DOCX 预览、字段拖拽绑定、图表绑定、生成报告 |
 
-## 5. 页面使用流程
+## 6. 当前页面使用流程
 
 1. **项目管理** — 新建项目（自动创建默认章节 + 初始化测试 JSON 数据源）
 2. **模板管理** — 上传 DOCX，系统自动解析黄色标记、占位符和图表
@@ -151,7 +173,7 @@ npm run dev
 4. 从左侧字段树拖拽标量字段到黄色/紫色文本，集合字段到橙色图表区域
 5. 点击"校验绑定"确认配置完整，点击"生成测试报告"导出 DOCX
 
-## 6. 模板标记
+## 7. 模板标记
 
 默认识别：
 
@@ -162,7 +184,7 @@ npm run dev
 
 扫描范围：正文、表格、页眉、页脚、脚注、尾注、文本框。
 
-## 7. 数据库表结构
+## 8. 数据库表结构
 
 | 领域     | 核心表                                                            |
 | -------- | ----------------------------------------------------------------- |
@@ -175,9 +197,11 @@ npm run dev
 
 数据结构说明见 `sql/report_platform_v2_1_database_design_and_dictionary.md`。
 
-## 8. 相关文档
+## 9. 相关文档
 
 - [数据库设计与数据字典](sql/report_platform_v2_1_database_design_and_dictionary.md)
 - [HTTP API](docs/api.md)
 - [第一第二阶段架构设计](docs/phase1-design.md)
 - [前端图表解析设计](docs/chart-analysis-design.md)
+- [两大中心项目改造计划](plan/04-two-center-project-refactoring-plan.md)
+- [两大中心改造基线](docs/refactor-baseline.md)
