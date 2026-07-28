@@ -70,6 +70,12 @@ public interface IWordTemplateSegmentEditor
         InsertTemplateSegmentBoundaryRequest request,
         CancellationToken cancellationToken = default);
 
+    /// <summary>在同一完整模板副本中批量插入多个片段内容控件。</summary>
+    Task<Stream> InsertBoundariesAsync(
+        string sourceDocxPath,
+        IReadOnlyList<InsertTemplateSegmentBoundaryRequest> requests,
+        CancellationToken cancellationToken = default);
+
     /// <summary>移除指定片段内容控件外壳并保留全部内部内容。</summary>
     Task<Stream> RemoveBoundaryAsync(
         string sourceDocxPath,

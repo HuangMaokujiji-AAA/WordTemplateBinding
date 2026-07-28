@@ -76,6 +76,20 @@ public sealed class PersistentApiWorkflowTests
             $"/api/template-versions/{versionId}/file");
         Assert.Equal(HttpStatusCode.OK, download.StatusCode);
         Assert.Equal(bytes, await download.Content.ReadAsByteArrayAsync());
+
+        JsonElement studio = await _client.GetFromJsonAsync<JsonElement>(
+            $"/api/template-studio/{templateId}?versionId={versionId}");
+        Assert.Equal(
+            versionId,
+            studio.GetProperty("versionView")
+                .GetProperty("version")
+                .GetProperty("id")
+                .GetString());
+        Assert.Equal(
+            1,
+            studio.GetProperty("summary")
+                .GetProperty("segmentCount")
+                .GetInt32());
     }
 
     /// <summary>
@@ -198,6 +212,92 @@ public sealed class PersistentApiWorkflowTests
             "full-document",
             originalSegments.GetProperty("items")[0]
                 .GetProperty("segmentKey").GetString());
+    }
+
+    /// <summary>
+    /// 验证多个不重叠边界只写入一个新模板版本。
+    /// </summary>
+    [Fact]
+    public async Task SegmentBoundaryBatchApi_CreatesOneVersionForAllRanges()
+    {
+        byte[] bytes = TestDocumentFactory.CreateParagraphs(
+            "第一段",
+            "第二段",
+            "第三段",
+            "第四段");
+        using MultipartFormDataContent form = new();
+        form.Add(new ByteArrayContent(bytes), "file", "boundary-batch.docx");
+        form.Add(
+            new StringContent($"BOUNDARY_BATCH_{Guid.NewGuid():N}"),
+            "templateCode");
+        form.Add(new StringContent("批量边界模板"), "templateName");
+        HttpResponseMessage upload = await _client.PostAsync(
+            "/api/templates",
+            form);
+        upload.EnsureSuccessStatusCode();
+        using JsonDocument uploaded = JsonDocument.Parse(
+            await upload.Content.ReadAsStringAsync());
+        string originalVersionId = uploaded.RootElement
+            .GetProperty("version")
+            .GetProperty("id")
+            .GetString()!;
+        JsonElement outline = await _client.GetFromJsonAsync<JsonElement>(
+            $"/api/template-versions/{originalVersionId}/segment-outline");
+        JsonElement blocks = outline.GetProperty("blocks");
+
+        HttpResponseMessage save = await _client.PostAsJsonAsync(
+            $"/api/template-versions/{originalVersionId}/segment-boundaries/batch",
+            new
+            {
+                expectedContentHash = outline.GetProperty("contentHash").GetString(),
+                boundaries = new[]
+                {
+                    new
+                    {
+                        segmentKey = "first",
+                        segmentName = "第一部分",
+                        startBlockId = blocks[0].GetProperty("blockId").GetString(),
+                        endBlockId = blocks[1].GetProperty("blockId").GetString(),
+                    },
+                    new
+                    {
+                        segmentKey = "second",
+                        segmentName = "第二部分",
+                        startBlockId = blocks[2].GetProperty("blockId").GetString(),
+                        endBlockId = blocks[3].GetProperty("blockId").GetString(),
+                    },
+                },
+            });
+
+        Assert.Equal(HttpStatusCode.Created, save.StatusCode);
+        using JsonDocument saved = JsonDocument.Parse(
+            await save.Content.ReadAsStringAsync());
+        string savedVersionId = saved.RootElement
+            .GetProperty("version")
+            .GetProperty("id")
+            .GetString()!;
+        Assert.NotEqual(originalVersionId, savedVersionId);
+        JsonElement segments = await _client.GetFromJsonAsync<JsonElement>(
+            $"/api/template-versions/{savedVersionId}/segments");
+        Assert.Equal(
+            new[] { "first", "second" },
+            segments.GetProperty("items")
+                .EnumerateArray()
+                .Select(item => item.GetProperty("segmentKey").GetString()));
+    }
+
+    /// <summary>
+    /// READY 解析版本不能在发布表落地前被误认为正式发布模板。
+    /// </summary>
+    [Fact]
+    public async Task TemplateReleaseApi_DoesNotExposeReadyVersionsAsPublished()
+    {
+        JsonElement releases = await _client.GetFromJsonAsync<JsonElement>(
+            "/api/template-releases");
+
+        Assert.False(
+            releases.GetProperty("publishingAvailable").GetBoolean());
+        Assert.Empty(releases.GetProperty("items").EnumerateArray());
     }
 
     /// <summary>

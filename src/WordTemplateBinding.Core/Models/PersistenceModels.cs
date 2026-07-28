@@ -223,6 +223,24 @@ public sealed record InsertTemplateSegmentBoundaryRequest
     public required string ExpectedContentHash { get; init; }
 }
 
+public sealed record TemplateSegmentBoundaryDraft
+{
+    public required string SegmentKey { get; init; }
+    public required string SegmentName { get; init; }
+    public required string StartBlockId { get; init; }
+    public required string EndBlockId { get; init; }
+}
+
+public sealed record SaveTemplateSegmentBoundariesRequest
+{
+    public required string ExpectedContentHash { get; init; }
+    public required IReadOnlyList<TemplateSegmentBoundaryDraft> Boundaries
+    {
+        get;
+        init;
+    }
+}
+
 public sealed record TemplateParseWarning(string Code, string Message);
 
 public sealed record TemplateParseResult

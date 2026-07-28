@@ -4,6 +4,8 @@ import {
   downloadReusableTemplate,
   getTemplateSegmentPreview,
   insertTemplateSegmentBoundary,
+  listTemplateVersions,
+  saveTemplateSegmentBoundaries,
 } from "../api/client";
 
 const DOCX_CONTENT_TYPE =
@@ -153,5 +155,89 @@ describe("DOCX download API client", () => {
         }),
       })
     );
+  });
+
+  it("saves multiple segment boundaries in one immutable version request", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(JSON.stringify({ version: { id: "new-version" } }), {
+        status: 201,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+
+    const boundaries = [
+      {
+        segmentKey: "overview",
+        segmentName: "概况",
+        startBlockId: "body/0",
+        endBlockId: "body/2",
+      },
+      {
+        segmentKey: "results",
+        segmentName: "检测结果",
+        startBlockId: "body/3",
+        endBlockId: "body/6",
+      },
+    ];
+    await saveTemplateSegmentBoundaries("version/id", {
+      expectedContentHash: "abc123",
+      boundaries,
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/template-versions/version%2Fid/segment-boundaries/batch",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          expectedContentHash: "abc123",
+          boundaries,
+        }),
+      })
+    );
+  });
+
+  it("expands version summaries before returning template detail rows", async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify([
+            {
+              id: "12",
+              templateId: "3",
+              versionNo: 2,
+              fileObjectId: "20",
+              versionStatus: "READY",
+              elementCount: 4,
+              createdAt: "2026-07-28T00:00:00Z",
+            },
+          ]),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            template: { id: "3" },
+            version: { id: "12", versionNo: 2 },
+            file: { id: "20", originalName: "report.docx", fileSize: 128 },
+            elements: [],
+            parseResult: {},
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }
+        )
+      );
+
+    const versions = await listTemplateVersions("3");
+
+    expect(fetch).toHaveBeenNthCalledWith(1, "/api/templates/3/versions", undefined);
+    expect(fetch).toHaveBeenNthCalledWith(2, "/api/template-versions/12", undefined);
+    expect(versions[0]?.file.originalName).toBe("report.docx");
+    expect(versions[0]?.version.id).toBe("12");
   });
 });

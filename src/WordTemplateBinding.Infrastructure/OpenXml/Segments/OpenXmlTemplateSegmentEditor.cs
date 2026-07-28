@@ -29,71 +29,93 @@ public sealed partial class OpenXmlTemplateSegmentEditor : IWordTemplateSegmentE
     public Task<Stream> InsertBoundaryAsync(
         string sourceDocxPath,
         InsertTemplateSegmentBoundaryRequest request,
+        CancellationToken cancellationToken = default) =>
+        InsertBoundariesAsync(
+            sourceDocxPath,
+            new[] { request },
+            cancellationToken);
+
+    public Task<Stream> InsertBoundariesAsync(
+        string sourceDocxPath,
+        IReadOnlyList<InsertTemplateSegmentBoundaryRequest> requests,
         CancellationToken cancellationToken = default)
     {
-        ValidateRequest(request);
+        if (requests.Count == 0)
+        {
+            throw new InvalidDataException("至少需要一个待保存的片段边界。");
+        }
+
+        foreach (InsertTemplateSegmentBoundaryRequest request in requests)
+        {
+            ValidateRequest(request);
+        }
+
+        if (requests
+            .GroupBy(request => request.SegmentKey, StringComparer.Ordinal)
+            .Any(group => group.Count() > 1))
+        {
+            throw new InvalidDataException("同一批次中的片段键不能重复。");
+        }
+
+        IReadOnlyList<BoundaryPlan> plans = requests
+            .Select(request =>
+            {
+                (string startParentPath, int startIndex) =
+                    ParseBlockId(request.StartBlockId);
+                (string endParentPath, int endIndex) =
+                    ParseBlockId(request.EndBlockId);
+                if (!string.Equals(
+                        startParentPath,
+                        endParentPath,
+                        StringComparison.Ordinal))
+                {
+                    throw new InvalidDataException(
+                        "片段起点和终点必须位于同一层级。");
+                }
+
+                if (startIndex > endIndex)
+                {
+                    throw new InvalidDataException(
+                        "片段起点必须位于终点之前。");
+                }
+
+                return new BoundaryPlan(
+                    request,
+                    startParentPath,
+                    startIndex,
+                    endIndex);
+            })
+            .ToList()
+            .AsReadOnly();
+        EnsureRangesDoNotOverlap(plans);
+
         return EditCopyAsync(sourceDocxPath, document =>
         {
             Body body = GetBody(document);
-            if (body.Descendants<SdtBlock>().Any(block =>
-                    string.Equals(
-                        GetSegmentKey(block),
-                        request.SegmentKey,
-                        StringComparison.Ordinal)))
+            HashSet<string> existingKeys = body
+                .Descendants<SdtBlock>()
+                .Select(GetSegmentKey)
+                .Where(key => key is not null)
+                .Select(key => key!)
+                .ToHashSet(StringComparer.Ordinal);
+            string? duplicateKey = requests
+                .Select(request => request.SegmentKey)
+                .FirstOrDefault(existingKeys.Contains);
+            if (duplicateKey is not null)
             {
                 throw new InvalidDataException(
-                    $"片段键“{request.SegmentKey}”已存在。");
+                    $"片段键“{duplicateKey}”已存在。");
             }
 
-            (string startParentPath, int startIndex) = ParseBlockId(
-                request.StartBlockId);
-            (string endParentPath, int endIndex) = ParseBlockId(
-                request.EndBlockId);
-            if (!string.Equals(
-                    startParentPath,
-                    endParentPath,
-                    StringComparison.Ordinal))
+            foreach (BoundaryPlan plan in plans
+                .OrderByDescending(plan => plan.ParentPath.Count(
+                    character => character == '/'))
+                .ThenByDescending(plan => plan.ParentPath, StringComparer.Ordinal)
+                .ThenByDescending(plan => plan.StartIndex))
             {
-                throw new InvalidDataException("片段起点和终点必须位于同一层级。");
+                InsertBoundary(body, plan);
             }
 
-            OpenXmlCompositeElement parent =
-                ResolveContainer(body, startParentPath);
-            if (startIndex > endIndex)
-            {
-                throw new InvalidDataException("片段起点必须位于终点之前。");
-            }
-
-            IReadOnlyList<OpenXmlElement> children = parent.ChildElements.ToList();
-            if (startIndex < 0 || endIndex >= children.Count)
-            {
-                throw new InvalidDataException("片段边界已失效，请刷新结构树后重试。");
-            }
-
-            List<OpenXmlElement> selected = children
-                .Skip(startIndex)
-                .Take(endIndex - startIndex + 1)
-                .ToList();
-            if (selected.Count == 0 || selected.Any(element => !CanSelect(element)))
-            {
-                throw new InvalidDataException(
-                    "片段只能包含完整段落、表格或块级内容控件。");
-            }
-
-            SdtContentBlock content = new();
-            foreach (OpenXmlElement element in selected)
-            {
-                element.Remove();
-                content.Append(element);
-            }
-
-            SdtBlock wrapper = new(
-                new SdtProperties(
-                    new SdtAlias { Val = request.SegmentName.Trim() },
-                    new Tag { Val = $"{SegmentTagPrefix}{request.SegmentKey}" },
-                    new SdtId { Val = Random.Shared.Next(1, int.MaxValue) }),
-                content);
-            parent.InsertAt(wrapper, startIndex);
             document.MainDocumentPart!.Document.Save();
         }, cancellationToken);
     }
@@ -234,6 +256,73 @@ public sealed partial class OpenXmlTemplateSegmentEditor : IWordTemplateSegmentE
     private static bool CanSelect(OpenXmlElement element) =>
         element is Paragraph or Table or SdtBlock;
 
+    private static void InsertBoundary(Body body, BoundaryPlan plan)
+    {
+        OpenXmlCompositeElement parent =
+            ResolveContainer(body, plan.ParentPath);
+        IReadOnlyList<OpenXmlElement> children =
+            parent.ChildElements.ToList();
+        if (plan.StartIndex < 0 || plan.EndIndex >= children.Count)
+        {
+            throw new InvalidDataException(
+                "片段边界已失效，请刷新结构树后重试。");
+        }
+
+        List<OpenXmlElement> selected = children
+            .Skip(plan.StartIndex)
+            .Take(plan.EndIndex - plan.StartIndex + 1)
+            .ToList();
+        if (selected.Count == 0 ||
+            selected.Any(element => !CanSelect(element)))
+        {
+            throw new InvalidDataException(
+                "片段只能包含完整段落、表格或块级内容控件。");
+        }
+
+        SdtContentBlock content = new();
+        foreach (OpenXmlElement element in selected)
+        {
+            element.Remove();
+            content.Append(element);
+        }
+
+        SdtBlock wrapper = new(
+            new SdtProperties(
+                new SdtAlias
+                {
+                    Val = plan.Request.SegmentName.Trim(),
+                },
+                new Tag
+                {
+                    Val = $"{SegmentTagPrefix}{plan.Request.SegmentKey}",
+                },
+                new SdtId { Val = Random.Shared.Next(1, int.MaxValue) }),
+            content);
+        parent.InsertAt(wrapper, plan.StartIndex);
+    }
+
+    private static void EnsureRangesDoNotOverlap(
+        IReadOnlyList<BoundaryPlan> plans)
+    {
+        foreach (IGrouping<string, BoundaryPlan> group in plans.GroupBy(
+            plan => plan.ParentPath,
+            StringComparer.Ordinal))
+        {
+            BoundaryPlan? previous = null;
+            foreach (BoundaryPlan current in group.OrderBy(plan => plan.StartIndex))
+            {
+                if (previous is not null &&
+                    current.StartIndex <= previous.EndIndex)
+                {
+                    throw new InvalidDataException(
+                        "同一层级的待保存片段范围不能重叠。");
+                }
+
+                previous = current;
+            }
+        }
+    }
+
     private static (string ParentPath, int Index) ParseBlockId(string blockId)
     {
         int slash = blockId.LastIndexOf('/');
@@ -351,6 +440,12 @@ public sealed partial class OpenXmlTemplateSegmentEditor : IWordTemplateSegmentE
 
     [GeneratedRegex("^[a-z0-9]+(?:-[a-z0-9]+)*$", RegexOptions.CultureInvariant)]
     private static partial Regex SegmentKeyRegex();
+
+    private sealed record BoundaryPlan(
+        InsertTemplateSegmentBoundaryRequest Request,
+        string ParentPath,
+        int StartIndex,
+        int EndIndex);
 }
 
 #pragma warning restore CS1591

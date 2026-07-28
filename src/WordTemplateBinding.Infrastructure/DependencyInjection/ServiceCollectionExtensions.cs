@@ -168,6 +168,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IContextualDataSchemaProvider, PersistentDataSchemaProvider>();
         services.AddScoped<TemplateCatalogService>();
         services.AddScoped<TemplateSegmentService>();
+        services.AddScoped<TemplateStudioService>();
         services.AddScoped<ProjectChapterService>();
         services.AddScoped<DataConnectionService>();
         services.AddScoped<DataSourceWorkspaceService>();

@@ -198,7 +198,7 @@ function handleRestore() {
 /* ── workspace navigation ─────────────────── */
 
 function goToWorkspace() {
-  router.push(`/workspace?templateId=${templateId.value}`);
+  router.push(`/template-center/studio?templateId=${templateId.value}`);
 }
 
 /* ── version operations ───────────────────── */

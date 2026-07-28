@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
+import { ref, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import {
   listProjects,
@@ -8,6 +8,9 @@ import {
   restoreProject,
 } from "../api/client";
 import type { ProjectRecord } from "../api/types";
+import ErrorBanner from "../shared/components/ErrorBanner.vue";
+import PaginationControls from "../shared/components/PaginationControls.vue";
+import StatusBadge from "../shared/components/StatusBadge.vue";
 
 const router = useRouter();
 
@@ -30,10 +33,6 @@ const createForm = ref({
   projectName: "",
   description: "",
 });
-
-/* ── computed ────────────────────────────── */
-
-const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)));
 
 const statusConfig: Record<string, { label: string; color: string }> = {
   DRAFT: { label: "草稿", color: "#6b7280" },
@@ -165,7 +164,7 @@ onMounted(fetchProjects);
     </div>
 
     <!-- error -->
-    <div v-if="error" class="error-banner">{{ error }}</div>
+    <ErrorBanner :message="error" />
 
     <!-- loading -->
     <div v-if="loading" class="loading-state">加载中…</div>
@@ -202,16 +201,10 @@ onMounted(fetchProjects);
             <td class="cell-code">{{ project.projectCode }}</td>
             <td class="cell-name">{{ project.projectName }}</td>
             <td>
-              <span
-                class="status-tag"
-                :style="{
-                  background: getStatusConfig(project.projectStatus).color + '18',
-                  color: getStatusConfig(project.projectStatus).color,
-                  borderColor: getStatusConfig(project.projectStatus).color + '30',
-                }"
-              >
-                {{ getStatusConfig(project.projectStatus).label }}
-              </span>
+              <StatusBadge
+                :label="getStatusConfig(project.projectStatus).label"
+                :color="getStatusConfig(project.projectStatus).color"
+              />
             </td>
             <td class="cell-date">{{ project.updatedAt }}</td>
             <td>
@@ -250,15 +243,12 @@ onMounted(fetchProjects);
     </div>
 
     <!-- pagination -->
-    <div v-if="total > pageSize" class="pagination">
-      <button class="btn btn-sm" :disabled="page <= 1" @click="goToPage(page - 1)">
-        上一页
-      </button>
-      <span class="page-info">第 {{ page }} / {{ totalPages }} 页，共 {{ total }} 条</span>
-      <button class="btn btn-sm" :disabled="page >= totalPages" @click="goToPage(page + 1)">
-        下一页
-      </button>
-    </div>
+    <PaginationControls
+      :page="page"
+      :page-size="pageSize"
+      :total="total"
+      @change="goToPage"
+    />
 
     <!-- create dialog -->
     <div v-if="showCreateDialog" class="dialog-overlay" @click.self="showCreateDialog = false">
@@ -269,7 +259,7 @@ onMounted(fetchProjects);
         </div>
 
         <div class="dialog-body">
-          <div v-if="createError" class="error-banner dialog-error">{{ createError }}</div>
+          <ErrorBanner :message="createError" />
 
           <div class="form-group">
             <label>项目编码 <span class="required">*</span></label>
@@ -523,33 +513,6 @@ onMounted(fetchProjects);
   flex-wrap: nowrap;
 }
 
-/* ── status tag ───────────────────────────── */
-
-.status-tag {
-  display: inline-block;
-  padding: 2px 10px;
-  border-radius: 12px;
-  font-size: 12px;
-  font-weight: 500;
-  border: 1px solid;
-}
-
-/* ── error ────────────────────────────────── */
-
-.error-banner {
-  background: #fef2f2;
-  border: 1px solid #fecaca;
-  color: #ef4444;
-  padding: 10px 16px;
-  border-radius: 6px;
-  margin-bottom: 16px;
-  font-size: 13px;
-}
-
-.dialog-error {
-  margin-bottom: 16px;
-}
-
 /* ── loading ──────────────────────────────── */
 
 .loading-state {
@@ -589,22 +552,6 @@ onMounted(fetchProjects);
   font-size: 13px;
   color: #94a3b8;
   margin: 0;
-}
-
-/* ── pagination ───────────────────────────── */
-
-.pagination {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  margin-top: 20px;
-  padding: 12px 0;
-}
-
-.page-info {
-  font-size: 13px;
-  color: #64748b;
 }
 
 /* ── dialog ───────────────────────────────── */

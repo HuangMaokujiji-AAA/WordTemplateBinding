@@ -4,7 +4,7 @@
 > 基线分支：`HuangMao`  
 > 基线提交：`0e02c0a`  
 > 对应计划：`plan/04-two-center-project-refactoring-plan.md`  
-> 状态：阶段 0 已完成
+> 状态：阶段 3 已完成
 
 ## 1. 基线目的
 
@@ -330,6 +330,205 @@ TypeError: Cannot read properties of undefined (reading 'id')
 - `WorkspaceView` 生产 chunk 约 1.7 MB、gzip 约 572 kB，构建产生大于 500 kB 警告；
 - 当前仍无独立模板发布和异步批量生成用户流程。
 
+### 阶段 1：代码结构瘦身，不改变业务
+
+状态：已完成
+
+阶段开始前约束：
+
+- 保持现有前端路由、HTTP 路由、请求与响应结构不变；
+- 保持现有数据库结构和读写行为不变；
+- 保留旧入口和兼容导出，避免一次性迁移所有调用方；
+- 先为阶段 0 发现的模板详情版本契约问题补充回归测试，再做前端适配；
+- 拆分后端工作区服务与端点、前端 API 与类型模块，并提取工作区状态和共享组件；
+- 完成后重新运行后端构建、单元测试、集成测试、前端类型检查、单元测试、构建和浏览器冒烟测试。
+
+数据库变更：无。
+
+预期结构：
+
+```text
+WordTemplateBinding.Core
+├── TemplateCenter
+├── ReportCenter
+└── Services（仅保留兼容说明与尚未迁移的服务）
+
+frontend/src
+├── api（按 templates / projects / dataSources / bindings 等领域拆分）
+├── composables（片段与绑定编辑状态）
+└── shared/components（状态、分页和错误提示）
+```
+
+实际输出：
+
+- `WorkspaceServices.cs` 缩减为 4 行迁移说明，原有公开服务类型和命名空间不变；
+- 核心服务已按 `TemplateCenter`、`ReportCenter` 及其子领域归档，项目章节、数据连接、数据源和绑定实现分别进入独立文件；
+- `WorkspaceEndpoints.cs` 缩减为 19 行兼容编排器，原有路由分别由 `ProjectEndpoints`、`DataConnectionEndpoints`、`DataSourceEndpoints` 和 `BindingSetEndpoints` 注册；
+- `api/client.ts` 和 `api/types.ts` 已变为兼容出口，调用与类型按模板、项目、数据源、绑定、报告等领域拆分；
+- `WorkspaceView.vue` 的片段边界状态和绑定选择状态分别提取到 `useSegmentEditor`、`useBindingEditor`；
+- `StatusBadge`、`PaginationControls`、`ErrorBanner` 已由项目列表和模板列表共同复用；
+- 修复阶段 0 记录的模板详情空白问题：前端保留版本摘要接口契约，并按版本 ID 读取完整视图；
+- 新增模板详情契约、片段编辑状态和绑定编辑状态回归测试。
+
+兼容性结论：
+
+- 前端路由无变化；
+- HTTP 路由与后端响应结构无变化；
+- 数据库结构和读写行为无变化；
+- 旧的 `../api/client`、`../api/types` 导入方式继续有效；
+- Core 服务仍使用 `WordTemplateBinding.Core.Services` 命名空间，现有依赖注入注册无需修改。
+
+验证结果：
+
+| 验证项 | 结果 |
+|---|---|
+| `dotnet build WordTemplateBinding.sln --no-restore -m:1 -p:UseSharedCompilation=false` | 通过，0 警告、0 错误 |
+| 后端单元测试 | 159/159 通过 |
+| 后端集成测试 | 14/14 通过 |
+| `npm run typecheck` | 通过 |
+| 前端 Vitest | 29 个文件、161/161 通过 |
+| `npm run build` | 通过；工作区大 chunk 警告仍为既有问题 |
+| Playwright 核心旅程 | 3/3 通过 |
+
+阶段 1 未解决项：
+
+- `WorkspaceView` 生产 chunk 约 1.75 MB、gzip 约 573 kB；阶段 2～3 在引入新页面壳和步骤组件时继续按路由/步骤拆包；
+- 模板详情为兼容现有后端契约，会按摘要逐个读取完整版本；后续聚合工作台 API 落地后统一消除多请求；
+- 尚未引入两大中心的新首页和一级导航，该工作属于阶段 2。
+
+### 阶段 2：应用外壳与两大中心入口
+
+状态：已完成
+
+阶段开始前约束：
+
+- 首页只负责引导两条核心任务，不在本阶段提前实现九步业务能力；
+- 一级导航调整为“首页、模板制作中心、报告生成中心”；
+- 新增两大中心布局，统一中心内导航、面包屑和内容出口；
+- 保留 `/projects`、`/projects/:projectId`、`/templates`、`/templates/:templateId`、`/workspace` 旧链接；
+- 旧链接直接访问时应继续工作，必要时提供迁移提示，不删除旧页面；
+- 不修改 HTTP API 和数据库结构。
+
+数据库变更：无。
+
+预期新入口：
+
+```text
+/
+├── /template-center
+│   ├── /template-center/templates
+│   └── /template-center/studio
+└── /report-center
+    ├── /report-center/jobs
+    ├── /report-center/new
+    └── /report-center/history
+```
+
+实际输出：
+
+- `/` 已由旧的项目列表重定向改为任务导向首页，明确展示“两项核心任务”及两套九步流程；
+- 一级导航已调整为“首页、模板制作中心、报告生成中心”；
+- 新增 `TemplateCenterLayout.vue`，提供模板库、制作工作台、面包屑和制作流程提示；
+- 新增 `ReportCenterLayout.vue`，提供生成任务、新建任务、生成记录、面包屑和生成流程提示；
+- 模板库、模板详情和现有绑定工作区已接入模板制作中心；
+- 报告生成中心已建立三个稳定路由和页面骨架，后续阶段在这些入口内接入发布模板、任务和产物能力；
+- `/projects`、`/projects/:projectId`、`/templates`、`/templates/:templateId`、`/workspace` 旧地址继续可访问；
+- 模板库内部操作已优先导航到新中心地址，收藏的旧地址仍保持兼容。
+- README 已同步新的首页、中心路由、兼容入口、首次使用流程和测试基线。
+
+验证结果：
+
+| 验证项 | 结果 |
+|---|---|
+| 后端构建 | 通过，0 警告、0 错误 |
+| 后端单元测试 | 159/159 通过 |
+| 后端集成测试 | 14/14 通过 |
+| `npm run typecheck` | 通过 |
+| 前端 Vitest | 30 个文件、163/163 通过 |
+| `npm run build` | 通过；工作区大 chunk 警告仍为既有问题 |
+| Playwright 核心旅程 | 4/4 通过 |
+
+兼容性结论：
+
+- HTTP API 和数据库无变化；
+- 旧页面和旧书签路由仍可访问；
+- 新中心使用独立懒加载页面块，首页和中心外壳未增加工作区主 chunk；
+- 报告生成中心当前仅为清晰入口和骨架，未伪造尚不存在的发布模板或异步任务数据。
+
+### 阶段 3：模板制作工作台基础流程
+
+状态：已完成
+
+阶段开始前约束：
+
+- 在一个连续工作台中覆盖第 1～3 步和第 5～8 步，第 4 步只接入已经稳定的规则入口；
+- 复用现有 DOCX 上传、片段扫描、图表预览、数据源、绑定、校验和测试生成能力；
+- `WorkspaceView.vue` 继续作为兼容页面，但不再承担九步工作台容器和全部步骤状态；
+- 片段边界支持一次提交多个待保存范围，只创建一个新模板版本；
+- 当前步骤、模板版本和片段选择可从 URL 恢复，未保存边界草稿提供离开保护；
+- 新增工作台聚合查询，减少首屏串行请求；
+- 发布版本查询只提供后续生成中心所需的只读契约，本阶段不新增发布表或伪造发布状态；
+- 不修改数据库结构。
+
+数据库变更：无。
+
+预期新结构：
+
+```text
+frontend/src/features/template-studio
+├── TemplateStudioView.vue
+├── composables
+└── steps
+    ├── CreateTemplateStep.vue
+    ├── ConfirmStructureStep.vue
+    ├── MarkDynamicContentStep.vue
+    ├── ConfigureRulesStep.vue
+    ├── ConnectDataSourceStep.vue
+    ├── BindFieldsStep.vue
+    ├── ValidateTemplateStep.vue
+    ├── TestTemplateStep.vue
+    └── PublishTemplateStep.vue
+
+WordTemplateBinding.Api
+└── TemplateStudioEndpoints
+```
+
+实际输出：
+
+- `/template-center/studio` 已切换为九步工作台容器，当前步骤和模板、版本、项目、章节、数据源、片段均保存在 URL，并将最近工作上下文写入浏览器本地恢复点；
+- 第 1 步可填写模板信息、上传 DOCX、创建不可变版本并触发扫描；
+- 第 2 步使用真实 DOCX 片段预览，支持同时编辑多个不重叠边界、一次保存并只创建一个新版本，也支持删除已写入边界且保留正文；
+- 第 3 步按文本、图表、表格和其他类型展示稳定元素键、定位方式、片段归属与解析状态，并支持重新扫描；
+- 第 4 步只开放当前已稳定的固定区块说明，条件与重复规则明确保留到阶段 7，不伪造持久化能力；
+- 第 5 步统一选择项目、章节、数据源和字段快照；第 6 步自动继承这些上下文并复用原有三栏绑定、DOCX/图表预览和自动保存能力；
+- 第 7 步按等级展示绑定校验问题并提供返回绑定修复入口；第 8 步生成前重新校验并下载真实样例 DOCX；
+- 第 9 步接入只读发布能力契约；在阶段 4 发布表落地前返回不可发布状态，READY 解析版本不会出现在报告生成中心；
+- 原 `WorkspaceView.vue` 缩减为兼容包装器，`/workspace` 旧路由继续加载原绑定工作区能力；
+- 新增 `GET /api/template-studio/{templateId}` 聚合接口、`POST /api/template-versions/{versionId}/segment-boundaries/batch` 批量边界接口和 `GET /api/template-releases` 发布查询契约；
+- 工作台聚合查询在片段扫描可能修复元素归属后重新读取版本，保证元素列表与片段统计处于同一状态；
+- 阶段 3 未修改数据库结构。
+
+验证结果：
+
+| 验证项 | 结果 |
+|---|---|
+| `dotnet test WordTemplateBinding.sln --no-restore` | 162/162 单元测试、16/16 集成测试通过 |
+| `npm run typecheck` | 通过 |
+| 前端 Vitest | 30 个文件、164/164 通过 |
+| `npm run build` | 通过；DOCX 处理 chunk 大于 500 kB 的警告仍存在 |
+| Playwright 核心旅程 | 4/4 通过 |
+| Playwright CLI 目视回归 | 通过；控制台 0 错误、0 警告 |
+
+目视回归截图：
+
+- `output/playwright/phase3-template-studio-step1.png`
+
+阶段 3 保留项：
+
+- 模板发布记录、发布门禁和可复用模板绑定配置属于阶段 4；
+- 条件区块、重复区块和蓝图的可视化规则编辑属于阶段 7；
+- 报告生成中心的异步批量生成闭环属于阶段 5～6。
+
 ## 12. 测试文件清单
 
 ### 12.1 后端单元测试
@@ -365,13 +564,16 @@ TypeError: Cannot read properties of undefined (reading 'id')
 - 绑定：`chartWorkspace.test.ts`、`importSummaryStatus.test.ts`、`renderedChartBindings.test.ts`、`renderedDocumentBindings.test.ts`
 - 图表识别与渲染：`barChartDetector.test.ts`、`groupChartWithCaption.test.ts`、`radarChartHandler.test.ts`、`radarRenderer.test.ts`、`wordRadarChartToECharts.test.ts`
 - 图表分析：`axisAnalyzer.test.ts`、`bindingSchema.test.ts`、`cacheParser.test.ts`、`categoryAnalyzer.test.ts`、`chartRelationshipReader.test.ts`、`chartXmlAnalyzer.test.ts`、`dataTable.test.ts`、`embeddedWorkbookReader.test.ts`、`seriesAnalyzer.test.ts`
+- 应用结构：`router.test.ts`、`useSegmentEditor.test.ts`、`useBindingEditor.test.ts`
 - 工具：`numberUtils.test.ts`、`relationshipParser.test.ts`
 
 ### 12.4 浏览器冒烟测试
 
 `frontend/e2e/core-journeys.smoke.spec.ts`：
 
-1. 制作模板当前旅程：从模板库进入片段与绑定工作区；
-2. 生成报告当前旅程：校验绑定并下载单份报告。
+1. 新首页和两大中心入口，并验证旧模板路由兼容；
+2. 制作模板当前旅程：从模板库进入片段与绑定工作区；
+3. 模板详情版本摘要契约回归；
+4. 生成报告当前旅程：校验绑定并下载单份报告。
 
 冒烟测试拦截 `/api/` 请求并使用固定数据，不读取或修改真实 MySQL；DOCX 预览和下载使用仓库已有样例文件。

@@ -79,6 +79,7 @@ app.UseStatusCodePages();
 app.UseDefaultFiles();
 app.UseStaticFiles();
 app.MapPersistentTemplateEndpoints();
+app.MapTemplateStudioEndpoints();
 app.MapWorkspaceEndpoints();
 if (string.Equals(
         persistenceOptions.Mode,

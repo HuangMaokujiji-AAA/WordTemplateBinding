@@ -350,7 +350,13 @@ POST /api/binding-sets/{bindingSetId}/export-reusable
 - `GET /api/template-segments/{segmentId}/preview`：同步生成或复用片段 DOCX 预览缓存并返回文件流。
 - `GET /api/template-versions/{versionId}/segment-outline`：返回可用于网页边界编辑的轻量块级结构和当前内容哈希。
 - `POST /api/template-versions/{versionId}/segment-boundaries`：在连续同级块外插入内容控件边界，并返回新建的不可变模板版本。
+- `POST /api/template-versions/{versionId}/segment-boundaries/batch`：一次提交 1～50 个不重叠边界，全部写入同一个 DOCX 副本并只创建一个新模板版本。
 - `DELETE /api/template-versions/{versionId}/segment-boundaries/{segmentKey}?expectedContentHash=...`：移除边界外壳、保留全部内容，并返回新模板版本。
 
 片段预览不是正式模板。报告生成接口仍以完整的 `rp_template_version.file_object_id` 为输入。
 边界插入和删除不会原地修改已有模板版本；请求中的内容哈希用于拒绝过期结构选择。
+
+## 8. 模板制作工作台聚合 API
+
+- `GET /api/template-studio/{templateId}?versionId={versionId}&bindingSetId={bindingSetId}`：返回固定模板版本视图、片段、结构树和绑定进度摘要，供九步工作台恢复上下文。
+- `GET /api/template-releases`：返回可供报告生成中心选择的正式发布版本。阶段 4 发布表落地前，`publishingAvailable` 为 `false` 且 `items` 为空；READY 解析版本不会被当作正式发布版本。

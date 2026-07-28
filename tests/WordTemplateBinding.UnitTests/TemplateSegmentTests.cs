@@ -184,6 +184,107 @@ public sealed class TemplateSegmentTests
         }
     }
 
+    [Fact]
+    public async Task SegmentEditor_InsertBoundaries_WritesOneCopyWithAllRanges()
+    {
+        byte[] bytes = CreateDocument(
+            new Paragraph(new Run(new Text("第一段"))),
+            new Paragraph(new Run(new Text("第二段"))),
+            new Paragraph(new Run(new Text("第三段"))),
+            new Paragraph(new Run(new Text("第四段"))));
+        string sourcePath = Path.Combine(
+            Path.GetTempPath(),
+            $"{Guid.NewGuid():N}.docx");
+        await File.WriteAllBytesAsync(sourcePath, bytes);
+        try
+        {
+            OpenXmlTemplateSegmentEditor editor = new();
+            await using Stream edited = await editor.InsertBoundariesAsync(
+                sourcePath,
+                new[]
+                {
+                    new InsertTemplateSegmentBoundaryRequest
+                    {
+                        SegmentKey = "first",
+                        SegmentName = "第一部分",
+                        StartBlockId = "body/0",
+                        EndBlockId = "body/1",
+                        ExpectedContentHash = "unused-by-editor",
+                    },
+                    new InsertTemplateSegmentBoundaryRequest
+                    {
+                        SegmentKey = "second",
+                        SegmentName = "第二部分",
+                        StartBlockId = "body/2",
+                        EndBlockId = "body/3",
+                        ExpectedContentHash = "unused-by-editor",
+                    },
+                });
+
+            using WordprocessingDocument document =
+                WordprocessingDocument.Open(edited, false);
+            Body body = document.MainDocumentPart!.Document.Body!;
+            Assert.Equal(
+                new[] { "wtb:segment:first", "wtb:segment:second" },
+                body.Elements<SdtBlock>()
+                    .Select(block => block.SdtProperties!
+                        .GetFirstChild<Tag>()!.Val!.Value));
+            Assert.Equal("第一段第二段第三段第四段", body.InnerText);
+        }
+        finally
+        {
+            File.Delete(sourcePath);
+        }
+    }
+
+    [Fact]
+    public async Task SegmentEditor_InsertBoundaries_RejectsOverlappingRanges()
+    {
+        byte[] bytes = CreateDocument(
+            new Paragraph(new Run(new Text("第一段"))),
+            new Paragraph(new Run(new Text("第二段"))),
+            new Paragraph(new Run(new Text("第三段"))));
+        string sourcePath = Path.Combine(
+            Path.GetTempPath(),
+            $"{Guid.NewGuid():N}.docx");
+        await File.WriteAllBytesAsync(sourcePath, bytes);
+        try
+        {
+            OpenXmlTemplateSegmentEditor editor = new();
+            InvalidDataException exception = await Assert.ThrowsAsync<
+                InvalidDataException>(async () =>
+            {
+                await using Stream _ = await editor.InsertBoundariesAsync(
+                    sourcePath,
+                    new[]
+                    {
+                        new InsertTemplateSegmentBoundaryRequest
+                        {
+                            SegmentKey = "first",
+                            SegmentName = "第一部分",
+                            StartBlockId = "body/0",
+                            EndBlockId = "body/1",
+                            ExpectedContentHash = "unused-by-editor",
+                        },
+                        new InsertTemplateSegmentBoundaryRequest
+                        {
+                            SegmentKey = "second",
+                            SegmentName = "第二部分",
+                            StartBlockId = "body/1",
+                            EndBlockId = "body/2",
+                            ExpectedContentHash = "unused-by-editor",
+                        },
+                    });
+            });
+
+            Assert.Contains("不能重叠", exception.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(sourcePath);
+        }
+    }
+
     private static SdtBlock Segment(string key, string alias, string text) => new(
         new SdtProperties(
             new SdtAlias { Val = alias },

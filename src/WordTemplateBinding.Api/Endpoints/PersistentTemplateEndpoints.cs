@@ -35,6 +35,9 @@ public static class PersistentTemplateEndpoints
         versions.MapPost(
             "/{versionId:regex(^[0-9]+$)}/segment-boundaries",
             InsertSegmentBoundaryAsync);
+        versions.MapPost(
+            "/{versionId:regex(^[0-9]+$)}/segment-boundaries/batch",
+            SaveSegmentBoundariesAsync);
         versions.MapDelete(
             "/{versionId:regex(^[0-9]+$)}/segment-boundaries/{segmentKey}",
             RemoveSegmentBoundaryAsync);
@@ -270,6 +273,21 @@ public static class PersistentTemplateEndpoints
         CancellationToken cancellationToken)
     {
         TemplateVersionView result = await service.InsertBoundaryAsync(
+            DatabaseIdParser.Required(versionId, nameof(versionId)),
+            request,
+            cancellationToken);
+        return Results.Created(
+            $"/api/template-versions/{result.Version.Id}",
+            PersistentApiMapper.VersionView(result));
+    }
+
+    private static async Task<IResult> SaveSegmentBoundariesAsync(
+        string versionId,
+        SaveTemplateSegmentBoundariesRequest request,
+        TemplateSegmentService service,
+        CancellationToken cancellationToken)
+    {
+        TemplateVersionView result = await service.SaveBoundariesAsync(
             DatabaseIdParser.Required(versionId, nameof(versionId)),
             request,
             cancellationToken);

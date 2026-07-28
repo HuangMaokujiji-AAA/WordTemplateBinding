@@ -47,10 +47,16 @@ public sealed class PersistentWorkflowTests
     /// <summary>
     /// 验证模板元素、快照字段、绑定集、建议、预览和报告生成使用同一组持久化 ID。
     /// </summary>
-    [Fact]
-    public async Task BindingSetWorkflow_PersistsValidatesPreviewsAndRenders()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task BindingSetWorkflow_PersistsValidatesPreviewsAndRenders(
+        bool usesSampleRowsEnvelope)
     {
         TestContext context = new();
+        string fieldPath = usesSampleRowsEnvelope
+            ? "rows.ReportTitle"
+            : "Report.ReportTitle";
         byte[] bytes = OpenXmlTestDocumentFactory.CreateParagraphDocument(
             "报告名称：{{text:ReportTitle}}");
         await using MemoryStream input = new(bytes, writable: false);
@@ -109,7 +115,7 @@ public sealed class PersistentWorkflowTests
                 {
                     Id = 0,
                     SnapshotId = snapshot.Id,
-                    FieldPath = "rows.ReportTitle",
+                    FieldPath = fieldPath,
                     FieldName = "ReportTitle",
                     Comment = "ReportTitle",
                     DataType = DataValueType.String,
@@ -123,7 +129,9 @@ public sealed class PersistentWorkflowTests
             CancellationToken.None);
         await context.Snapshots.CompleteAsync(
             snapshot.Id,
-            """{"captureMode":"SCHEMA_AND_SAMPLE","sampleRows":[{"ReportTitle":"年度质量报告"}]}""",
+            usesSampleRowsEnvelope
+                ? """{"captureMode":"SCHEMA_AND_SAMPLE","sampleRows":[{"ReportTitle":"年度质量报告"}]}"""
+                : """{"Report":{"ReportTitle":"年度质量报告"}}""",
             "{}",
             new string('a', 64),
             1,
@@ -138,7 +146,7 @@ public sealed class PersistentWorkflowTests
                 element.Id,
                 source.Id,
                 CancellationToken.None);
-        Assert.Equal("rows.ReportTitle", Assert.Single(suggestions).FieldPath);
+        Assert.Equal(fieldPath, Assert.Single(suggestions).FieldPath);
 
         BindingItemRecord item = await context.Bindings.UpsertAsync(
             set.Id,
@@ -146,10 +154,14 @@ public sealed class PersistentWorkflowTests
             new BindingItemUpsert
             {
                 DataSourceId = source.Id,
-                SourcePath = "rows.ReportTitle",
+                SourcePath = fieldPath,
+                // MySQL JSON columns historically returned an omitted optional
+                // format configuration as the JSON literal "null".
+                FormatConfigJson = "null",
             },
             CancellationToken.None);
         Assert.NotEqual(0UL, item.Id);
+        Assert.Equal("null", item.FormatConfigJson);
 
         BindingValidationResult validation = await context.Bindings.ValidateAsync(
             set.Id,

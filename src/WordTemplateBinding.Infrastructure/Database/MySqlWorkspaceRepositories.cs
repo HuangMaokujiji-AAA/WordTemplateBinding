@@ -1336,9 +1336,9 @@ public sealed class MySqlBindingItemRepository : IBindingItemRepository
         command.AddParameter("@sourceKind", request.SourceKind);
         command.AddParameter("@sourceId", request.DataSourceId);
         command.AddParameter("@path", request.SourcePath);
-        command.AddParameter("@transform", request.TransformConfigJson ?? "null");
-        command.AddParameter("@format", request.FormatConfigJson ?? "null");
-        command.AddParameter("@fallback", request.FallbackValueJson ?? "null");
+        command.AddParameter("@transform", request.TransformConfigJson);
+        command.AddParameter("@format", request.FormatConfigJson);
+        command.AddParameter("@fallback", request.FallbackValueJson);
         command.AddParameter("@required", request.IsRequired);
         ulong id = Convert.ToUInt64(
             await command.ExecuteScalarAsync(cancellationToken),
@@ -1446,15 +1446,23 @@ public sealed class MySqlBindingItemRepository : IBindingItemRepository
                 ? null
                 : reader.GetUInt64(sourceIdOrdinal),
             SourcePath = reader.GetNullableString("source_path"),
-            TransformConfigJson = reader.GetNullableString("transform_config_json"),
-            FormatConfigJson = reader.GetNullableString("format_config_json"),
-            FallbackValueJson = reader.GetNullableString("fallback_value_json"),
+            TransformConfigJson = NormalizeOptionalJson(
+                reader.GetNullableString("transform_config_json")),
+            FormatConfigJson = NormalizeOptionalJson(
+                reader.GetNullableString("format_config_json")),
+            FallbackValueJson = NormalizeOptionalJson(
+                reader.GetNullableString("fallback_value_json")),
             IsRequired = reader.GetBoolean(reader.GetOrdinal("is_required")),
             SortNo = reader.GetInt32("sort_no"),
             CreatedAt = reader.GetDateTimeOffset("created_at"),
             UpdatedAt = reader.GetDateTimeOffset("updated_at"),
         };
     }
+
+    private static string? NormalizeOptionalJson(string? json) =>
+        string.Equals(json?.Trim(), "null", StringComparison.OrdinalIgnoreCase)
+            ? null
+            : json;
 }
 
 #pragma warning restore CS1591

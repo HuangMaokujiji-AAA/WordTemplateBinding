@@ -167,6 +167,46 @@ async function installCurrentSystemApi(page: Page) {
         pageSize: Number(url.searchParams.get("pageSize") || 20),
       });
     }
+    if (path === "/api/templates/10" && method === "GET") {
+      return fulfillJson(route, templateRecord);
+    }
+    if (path === "/api/templates/10/versions" && method === "GET") {
+      return fulfillJson(route, [versionView.version]);
+    }
+    if (path === "/api/template-versions/6" && method === "GET") {
+      return fulfillJson(route, versionView);
+    }
+    if (path === "/api/template-studio/10" && method === "GET") {
+      return fulfillJson(route, {
+        versionView,
+        segments: [segmentRecord],
+        outline: {
+          templateVersionId: "6",
+          contentHash: "baseline-content-hash",
+          blocks: [
+            {
+              blockId: "body/0",
+              blockType: "PARAGRAPH",
+              displayText: "基线报告标题",
+              segmentKey: null,
+              canSelect: true,
+              depth: 0,
+              children: [],
+            },
+          ],
+        },
+        summary: {
+          segmentCount: 1,
+          elementCount: 0,
+          validElementCount: 0,
+          warningElementCount: 0,
+          unsupportedElementCount: 0,
+          chartCount: 0,
+          boundElementCount: 0,
+          requiredMissingCount: 0,
+        },
+      });
+    }
     if (path === "/api/projects" && method === "GET") {
       return fulfillJson(route, {
         items: [projectRecord],
@@ -287,7 +327,21 @@ test.beforeEach(async ({ page }) => {
   await installCurrentSystemApi(page);
 });
 
-test("制作模板当前旅程：从模板库进入片段与绑定工作区", async ({ page }) => {
+test("首页通过两大中心引导核心任务，并保留旧模板入口", async ({ page }) => {
+  await page.goto("/#/");
+  await expect(page.getByRole("heading", { name: "今天要完成哪项任务？" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "模板制作中心", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "报告生成中心", exact: true })).toBeVisible();
+
+  await page.getByRole("link", { name: "进入模板制作中心" }).click();
+  await expect(page).toHaveURL(/#\/template-center\/templates/);
+  await expect(page.getByRole("heading", { name: "模板管理" })).toBeVisible();
+
+  await page.goto("/#/templates");
+  await expect(page.getByRole("heading", { name: "模板管理" })).toBeVisible();
+});
+
+test("制作模板当前旅程：从模板库确认结构、数据源并进入绑定", async ({ page }) => {
   await page.goto("/#/templates");
   await expect(page.getByRole("heading", { name: "模板管理" })).toBeVisible();
   const templateRow = page.getByRole("row", { name: /TPL_BASELINE/ });
@@ -298,18 +352,44 @@ test("制作模板当前旅程：从模板库进入片段与绑定工作区", as
   await page.locator(".dialog-close").click();
 
   await templateRow.getByRole("button", { name: "进入绑定" }).click();
-  await expect(page).toHaveURL(/#\/workspace/);
+  await expect(page).toHaveURL(/#\/template-center\/studio/);
+  await expect(
+    page.getByRole("heading", { name: "确认报告结构" }).first(),
+  ).toBeVisible();
+  await expect(page.getByText("完整模板").first()).toBeVisible();
+
+  await page.getByRole("button", { name: /5 数据/ }).click();
+  await expect(
+    page.getByRole("heading", { name: "连接数据源" }).first(),
+  ).toBeVisible();
+  await expect(page.locator(".studio-form-grid select").nth(0)).toHaveValue("1");
+  await expect(page.locator(".studio-form-grid select").nth(1)).toHaveValue("2");
+  await expect(page.locator(".studio-form-grid select").nth(2)).toHaveValue("3");
+  await page.getByRole("button", { name: "数据上下文已确认，开始绑定" }).click();
+
+  await expect(
+    page.getByRole("heading", { name: "拖拽绑定字段" }).first(),
+  ).toBeVisible();
   await expect(contextSelect(page, "项目")).toHaveValue("1");
-  await contextSelect(page, "模板").selectOption("10");
+  await expect(contextSelect(page, "章节")).toHaveValue("2");
+  await expect(contextSelect(page, "数据源")).toHaveValue("3");
+  await expect(contextSelect(page, "模板")).toHaveValue("10");
   await expect(page.getByRole("treeitem", { name: /完整模板/ })).toBeVisible({
     timeout: 30_000,
   });
-
-  await page.getByRole("button", { name: "管理拆分边界" }).click();
-  await expect(
-    page.getByPlaceholder("例如：专业监测结果"),
-  ).toBeVisible();
   await expect(page.getByText(/已加载片段：完整模板/).first()).toBeVisible();
+});
+
+test("模板详情可将版本摘要展开为完整版本视图", async ({ page }) => {
+  await page.goto("/#/templates");
+  const templateRow = page.getByRole("row", { name: /TPL_BASELINE/ });
+  await templateRow.getByRole("button", { name: "查看" }).click();
+
+  await expect(page).toHaveURL(/#\/template-center\/templates\/10/);
+  await expect(page.getByRole("heading", { name: "模板详情" })).toBeVisible();
+  await expect(page.getByRole("row", { name: /基线监测报告\.docx/ })).toContainText(
+    "v6",
+  );
 });
 
 test("生成报告当前旅程：校验绑定并下载单份报告", async ({ page }) => {
