@@ -58,6 +58,8 @@ builder.Services.AddProblemDetails(options =>
 });
 builder.Services.AddReportPlatformDatabase(builder.Configuration);
 builder.Services.AddWordTemplateBinding(builder.Configuration, templateOptions);
+builder.Services.AddSingleton<WordTemplateBinding.Api.Services.WpsPdfConverter>();
+builder.Services.AddSingleton<WordTemplateBinding.Api.Services.DocxAnchorService>();
 
 WebApplication app = builder.Build();
 if (string.Equals(
@@ -81,6 +83,7 @@ app.UseStaticFiles();
 app.MapPersistentTemplateEndpoints();
 app.MapTemplateStudioEndpoints();
 app.MapWorkspaceEndpoints();
+app.MapWpsEndpoints();
 if (string.Equals(
         persistenceOptions.Mode,
         "InMemory",
