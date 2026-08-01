@@ -2,6 +2,7 @@ import JSZip from "jszip";
 import { validateDocxFile } from "./file-validator/validateDocxFile";
 import { locateDocumentCharts } from "./ooxml/documentChartLocator";
 import { injectChartMarkers } from "./ooxml/docxMarkerInjector";
+import { injectBlockBookmarks } from "./ooxml/blockBookmarkInjector";
 import { parseXmlString } from "./ooxml/xmlUtils";
 import { renderDocx } from "./rendering/renderDocx";
 import {
@@ -77,12 +78,15 @@ export interface DocxProcessResult {
   charts: ParsedChartProcessResult[];
 
   warnings: string[];
+  blockMarkerIds?: Record<string, string>;
+  blockEndMarkerIds?: Record<string, string>;
 }
 
 export interface ProcessDocxOptions {
   documentContainer: HTMLElement;
   styleContainer: HTMLElement;
   onProgress?: (progress: DocxProcessProgress) => void;
+  outlineBlockIds?: string[];
 }
 
 /**
@@ -153,7 +157,16 @@ export async function processDocx(
     }
     const docXmlString = await docXmlFile.async("text");
 
-    injectChartMarkers(zip, locatedCharts, docXmlString);
+    const chartMarkerResult = injectChartMarkers(
+      zip,
+      locatedCharts,
+      docXmlString
+    );
+    const blockMarkerResult = injectBlockBookmarks(
+      zip,
+      options.outlineBlockIds || [],
+      chartMarkerResult.modifiedXml
+    );
 
     // Generate the modified DOCX blob
     options.onProgress?.({
@@ -397,6 +410,8 @@ export async function processDocx(
       failedCharts,
       charts: chartResults,
       warnings,
+      blockMarkerIds: blockMarkerResult.bookmarkIds,
+      blockEndMarkerIds: blockMarkerResult.endBookmarkIds,
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -414,6 +429,8 @@ export async function processDocx(
       failedCharts: 0,
       charts: [],
       warnings: [...warnings, msg],
+      blockMarkerIds: {},
+      blockEndMarkerIds: {},
     };
   }
 }

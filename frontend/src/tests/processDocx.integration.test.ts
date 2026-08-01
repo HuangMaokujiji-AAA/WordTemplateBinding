@@ -3,6 +3,10 @@ import { readFileSync } from "fs";
 import { resolve } from "path";
 import { processDocx } from "../features/docx/processDocx";
 import { chartInstanceManager } from "../features/docx/rendering/chartInstanceManager";
+import {
+  findRenderedBlockForMarker,
+  findSafePageEndSplitCandidates,
+} from "../features/template-studio/structureSplitNodes";
 
 // jsdom has no real <canvas> 2D context backend, so ECharts' canvas paint
 // loop throws asynchronously once mounted. This test targets the
@@ -61,10 +65,42 @@ describe("processDocx — chart-analysis integration", () => {
     document.body.append(documentContainer, styleContainer);
 
     try {
-      const result = await processDocx(file, { documentContainer, styleContainer });
+      const result = await processDocx(file, {
+        documentContainer,
+        styleContainer,
+        outlineBlockIds: Array.from({ length: 49 }, (_, index) => `body/${index}`),
+      });
 
       expect(result.totalCharts).toBe(10);
       expect(result.charts).toHaveLength(10);
+      expect(result.blockMarkerIds?.["body/0"]).toBeTruthy();
+      expect(result.blockEndMarkerIds?.["body/0"]).toBeTruthy();
+      expect(
+        documentContainer.querySelector(
+          `[id="${result.blockMarkerIds?.["body/0"]}"]`
+        )
+      ).not.toBeNull();
+      expect(
+        documentContainer.querySelector(
+          `[id="${result.blockEndMarkerIds?.["body/0"]}"]`
+        )
+      ).not.toBeNull();
+      const starts = Array.from({ length: 49 }, (_, index) =>
+        findRenderedBlockForMarker(
+          documentContainer,
+          result.blockMarkerIds?.[`body/${index}`] || ""
+        )
+      );
+      const ends = Array.from({ length: 49 }, (_, index) =>
+        findRenderedBlockForMarker(
+          documentContainer,
+          result.blockEndMarkerIds?.[`body/${index}`] || ""
+        )
+      );
+      expect(
+        findSafePageEndSplitCandidates(documentContainer, starts, ends)
+          .map((candidate) => candidate.splitIndex)
+      ).toEqual([16, 22, 33, 39, 42]);
 
       // Every chart result carries a model (this document has no missing chart parts).
       for (const chart of result.charts) {

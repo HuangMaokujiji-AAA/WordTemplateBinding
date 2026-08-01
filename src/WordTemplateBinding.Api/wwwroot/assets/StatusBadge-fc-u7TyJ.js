@@ -1,0 +1,1 @@
+import{B as e,D as t,g as n,n as r,x as i,z as a}from"./index-BR-yanAV.js";var o=r(i({__name:`StatusBadge`,props:{label:{},color:{default:`#6b7280`}},setup(r){return(i,o)=>(t(),n(`span`,{class:`status-badge`,style:a({background:`${r.color}18`,color:r.color,borderColor:`${r.color}30`})},e(r.label),5))}}),[[`__scopeId`,`data-v-689e088c`]]);export{o as t};
