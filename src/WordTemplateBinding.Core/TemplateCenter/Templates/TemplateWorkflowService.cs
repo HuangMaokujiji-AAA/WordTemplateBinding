@@ -179,7 +179,9 @@ public sealed class TemplateWorkflowService
     /// <param name="scanResult">模板扫描结果。</param>
     private static void EnsureMockItemsExist(TemplateScanResult scanResult)
     {
-        if (scanResult.MockItems.Count == 0 && scanResult.Charts.Count == 0)
+        if (scanResult.MockItems.Count == 0 &&
+            scanResult.Charts.Count == 0 &&
+            scanResult.Tables.Count == 0)
         {
             throw new NoMockDataFoundException();
         }

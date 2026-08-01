@@ -2,11 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   downloadReport,
   downloadReusableTemplate,
+  getPersistentSchema,
   getTemplateSegmentPreview,
   insertTemplateSegmentBoundary,
   listTemplateVersions,
   saveTemplateSegmentBoundaries,
 } from "../api/client";
+import { parseError } from "../api/httpClient";
 
 const DOCX_CONTENT_TYPE =
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
@@ -94,6 +96,26 @@ describe("DOCX download API client", () => {
     expect(createObjectURL).not.toHaveBeenCalled();
   });
 
+  it("surfaces validation messages and the stable ProblemDetails error code", async () => {
+    const response = new Response(
+      JSON.stringify({
+        title: "One or more validation errors occurred.",
+        errorCode: "invalid_higher_education_query",
+        errors: {
+          schoolCode: ["学校代码不能为空。"],
+        },
+      }),
+      {
+        status: 400,
+        headers: { "Content-Type": "application/problem+json" },
+      }
+    );
+
+    await expect(parseError(response)).rejects.toThrow(
+      "学校代码不能为空。（invalid_higher_education_query）"
+    );
+  });
+
   it("rejects a successful response whose content type is not DOCX", async () => {
     vi.mocked(fetch).mockResolvedValue(
       new Response("not a docx", {
@@ -124,6 +146,56 @@ describe("DOCX download API client", () => {
       "/api/template-segments/segment%2Fid/preview"
     );
     expect(file.name).toBe("major-monitoring-preview.docx");
+  });
+
+  it("keeps persistent data-source fields grouped by major", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(
+        JSON.stringify([
+          {
+            name: "专业指标雷达图数据（按专业）",
+            path: "majorMetrics",
+            type: "Object",
+            isCollection: false,
+            isLeaf: false,
+            isBindable: false,
+            children: [
+              {
+                name: "大气科学（070601）",
+                path: "majorMetrics.070601",
+                type: "Object",
+                isCollection: false,
+                isLeaf: false,
+                isBindable: false,
+                children: [
+                  {
+                    name: "一级指标雷达图",
+                    path: "majorMetrics.070601.level1RadarData",
+                    type: "Array",
+                    isCollection: true,
+                    isLeaf: true,
+                    isBindable: true,
+                    children: [],
+                  },
+                ],
+              },
+            ],
+          },
+        ]),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }
+      )
+    );
+
+    const schema = await getPersistentSchema("source/id");
+
+    expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe(
+      "/api/data-sources/source%2Fid/schema"
+    );
+    expect(schema.totalLeafCount).toBe(1);
+    expect(schema.nodes[0]?.children[0]?.name).toBe("大气科学（070601）");
   });
 
   it("posts a block range and content hash when inserting a segment boundary", async () => {

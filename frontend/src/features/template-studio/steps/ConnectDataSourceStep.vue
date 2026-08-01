@@ -1,16 +1,22 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import {
+  createHigherEducationDataSource,
+  getOrCreateBindingSet,
   listChapters,
   listDataFields,
   listDataSources,
+  listHigherEducationSchools,
+  listHigherEducationYears,
   listProjects,
   refreshDataSource,
+  resolveBindingCandidates,
 } from "../../../api/client";
 import type {
   ChapterRecord,
   DataFieldRecord,
   DataSourceRecord,
+  HigherEducationSchool,
   ProjectRecord,
 } from "../../../api/types";
 import type {
@@ -35,6 +41,11 @@ const query = ref("");
 const loading = ref(false);
 const message = ref("");
 const isError = ref(false);
+const higherEducationYears = ref<string[]>([]);
+const higherEducationSchools = ref<HigherEducationSchool[]>([]);
+const higherEducationYear = ref("2024");
+const higherEducationSchoolCode = ref("");
+const creatingHigherEducation = ref(false);
 let initializing = true;
 
 const visibleFields = computed(() => {
@@ -105,6 +116,60 @@ async function loadFields(): Promise<void> {
     : [];
 }
 
+async function loadHigherEducationCatalog(): Promise<void> {
+  try {
+    higherEducationYears.value = await listHigherEducationYears();
+    if (
+      higherEducationYears.value.length > 0 &&
+      !higherEducationYears.value.includes(higherEducationYear.value)
+    ) {
+      higherEducationYear.value = higherEducationYears.value[0];
+    }
+    await loadHigherEducationSchools();
+  } catch {
+    higherEducationYears.value = [];
+    higherEducationSchools.value = [];
+  }
+}
+
+async function loadHigherEducationSchools(): Promise<void> {
+  higherEducationSchools.value = higherEducationYear.value
+    ? await listHigherEducationSchools(higherEducationYear.value)
+    : [];
+  if (
+    !higherEducationSchools.value.some(
+      (item) => item.schoolCode === higherEducationSchoolCode.value
+    )
+  ) {
+    higherEducationSchoolCode.value =
+      higherEducationSchools.value[0]?.schoolCode || "";
+  }
+}
+
+async function createMonitoringDataSource(): Promise<void> {
+  if (!projectId.value || !higherEducationSchoolCode.value) return;
+  creatingHigherEducation.value = true;
+  try {
+    const result = await createHigherEducationDataSource({
+      projectId: projectId.value,
+      collectionYear: higherEducationYear.value,
+      schoolCode: higherEducationSchoolCode.value,
+    });
+    const existingIndex = sources.value.findIndex(
+      (item) => item.id === result.source.id
+    );
+    if (existingIndex >= 0) sources.value.splice(existingIndex, 1, result.source);
+    else sources.value.unshift(result.source);
+    dataSourceId.value = result.source.id;
+    message.value = `已构造 ${result.source.sourceName}，共读取 ${result.snapshot.rowCount ?? 0} 行监测数据。`;
+    isError.value = false;
+  } catch (error) {
+    showError(error, "构造高校监测数据源失败。");
+  } finally {
+    creatingHigherEducation.value = false;
+  }
+}
+
 async function refresh(): Promise<void> {
   if (!dataSourceId.value) return;
   loading.value = true;
@@ -128,12 +193,33 @@ function syncContext(): void {
   });
 }
 
-function finish(): void {
-  emit("complete", {
-    projectId: projectId.value,
-    chapterId: chapterId.value,
-    dataSourceId: dataSourceId.value,
-  });
+async function finish(): Promise<void> {
+  if (!chapterId.value || !dataSourceId.value) return;
+  loading.value = true;
+  try {
+    if (props.context.versionId) {
+      const bindingSet = await getOrCreateBindingSet(
+        chapterId.value,
+        props.context.versionId
+      );
+      const summary = await resolveBindingCandidates(
+        bindingSet.id,
+        dataSourceId.value
+      );
+      const tableCount = summary.tableBindingsRestored || 0;
+      message.value = `自动绑定完成：${summary.textBindingsRestored} 个文本、${summary.chartBindingsRestored} 个图表、${tableCount} 个表格。`;
+      isError.value = false;
+    }
+    emit("complete", {
+      projectId: projectId.value,
+      chapterId: chapterId.value,
+      dataSourceId: dataSourceId.value,
+    });
+  } catch (error) {
+    showError(error, "自动绑定数据源失败。");
+  } finally {
+    loading.value = false;
+  }
 }
 
 function showError(error: unknown, fallback: string): void {
@@ -160,7 +246,18 @@ watch(dataSourceId, async () => {
   }
 });
 
-onMounted(() => void loadProjects());
+watch(higherEducationYear, async () => {
+  try {
+    await loadHigherEducationSchools();
+  } catch (error) {
+    showError(error, "加载高校名单失败。");
+  }
+});
+
+onMounted(() => {
+  void loadProjects();
+  void loadHigherEducationCatalog();
+});
 </script>
 
 <template>
@@ -219,6 +316,44 @@ onMounted(() => void loadProjects());
         </label>
       </div>
 
+      <section v-if="higherEducationYears.length" class="monitoring-source-panel">
+        <div>
+          <strong>高校本科专业教学质量监测数据</strong>
+          <span>从已导入的 9 张英文数据表构造统一快照，供文本、图表和表格自动绑定。</span>
+        </div>
+        <label class="studio-field compact">
+          <span>年度</span>
+          <select v-model="higherEducationYear" :disabled="creatingHigherEducation">
+            <option v-for="year in higherEducationYears" :key="year" :value="year">
+              {{ year }}
+            </option>
+          </select>
+        </label>
+        <label class="studio-field school-select">
+          <span>学校</span>
+          <select
+            v-model="higherEducationSchoolCode"
+            :disabled="creatingHigherEducation || !higherEducationSchools.length"
+          >
+            <option
+              v-for="school in higherEducationSchools"
+              :key="`${school.collectionYear}-${school.schoolCode}`"
+              :value="school.schoolCode"
+            >
+              {{ school.schoolCode }} · {{ school.schoolName }}
+            </option>
+          </select>
+        </label>
+        <button
+          type="button"
+          class="studio-button primary"
+          :disabled="creatingHigherEducation || !projectId || !higherEducationSchoolCode"
+          @click="createMonitoringDataSource"
+        >
+          {{ creatingHigherEducation ? "正在构造…" : "构造报告数据源" }}
+        </button>
+      </section>
+
       <div v-if="dataSourceId" class="field-panel">
         <div class="field-panel-heading">
           <strong>可绑定字段</strong>
@@ -247,7 +382,7 @@ onMounted(() => void loadProjects());
           :disabled="loading || !projectId || !chapterId || !dataSourceId"
           @click="finish"
         >
-          数据上下文已确认，开始绑定
+          数据上下文已确认，自动绑定并继续
         </button>
       </div>
     </div>
@@ -260,6 +395,40 @@ onMounted(() => void loadProjects());
   border: 1px solid #e0e6ef;
   border-radius: 10px;
   overflow: hidden;
+}
+
+.monitoring-source-panel {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) 110px minmax(260px, 0.8fr) auto;
+  gap: 12px;
+  align-items: end;
+  margin-top: 18px;
+  padding: 14px;
+  border: 1px solid #bfd7ff;
+  border-radius: 10px;
+  background: #f5f9ff;
+}
+
+.monitoring-source-panel > div {
+  display: grid;
+  gap: 5px;
+  align-self: center;
+  color: #344054;
+}
+
+.monitoring-source-panel > div span {
+  color: #667085;
+  font-size: 11px;
+}
+
+@media (max-width: 980px) {
+  .monitoring-source-panel {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .monitoring-source-panel > div {
+    grid-column: 1 / -1;
+  }
 }
 
 .field-panel-heading {

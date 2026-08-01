@@ -370,6 +370,7 @@ export function hydrateTemplateResponse(
     importSummary: view.parseResult.importSummary || {
       textBindingsRestored: 0,
       chartBindingsRestored: 0,
+      tableBindingsRestored: 0,
       unresolvedPlaceholders: [],
       warnings: [],
     },

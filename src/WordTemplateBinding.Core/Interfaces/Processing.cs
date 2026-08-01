@@ -179,6 +179,30 @@ public interface ILocatorIdGenerator
     /// <param name="locator">图表定位信息。</param>
     /// <returns>返回 Base64Url 编码的 SHA-256 标识。</returns>
     string Generate(string templateHash, ChartLocator locator);
+
+    /// <summary>
+    /// 根据模板哈希和表格定位信息生成稳定标识。
+    /// </summary>
+    string Generate(string templateHash, TableLocator locator);
+}
+
+/// <summary>读取高校本科专业教学质量监测数据并构造报告数据源。</summary>
+public interface IHigherEducationReportDataProvider
+{
+    /// <summary>列出已有监测年度。</summary>
+    Task<IReadOnlyList<string>> ListYearsAsync(
+        CancellationToken cancellationToken = default);
+
+    /// <summary>列出指定年度可生成报告的学校。</summary>
+    Task<IReadOnlyList<HigherEducationSchool>> ListSchoolsAsync(
+        string collectionYear,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>构造指定学校和年度的完整报告数据对象。</summary>
+    Task<HigherEducationReportData> BuildReportAsync(
+        string collectionYear,
+        string schoolCode,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>

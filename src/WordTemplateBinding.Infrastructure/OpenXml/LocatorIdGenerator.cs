@@ -43,6 +43,21 @@ public sealed class LocatorIdGenerator : ILocatorIdGenerator
         return base64.TrimEnd('=').Replace('+', '-').Replace('/', '_');
     }
 
+    /// <inheritdoc />
+    public string Generate(string templateHash, TableLocator locator)
+    {
+        using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        AppendString(hash, templateHash);
+        AppendString(hash, "table");
+        AppendString(hash, locator.PartKey);
+        AppendInt32(hash, locator.TableIndex);
+        AppendInt32(hash, locator.FirstParagraphIndex);
+        AppendString(hash, locator.HeaderSignature);
+
+        string base64 = Convert.ToBase64String(hash.GetHashAndReset());
+        return base64.TrimEnd('=').Replace('+', '-').Replace('/', '_');
+    }
+
     /// <summary>
     /// 将字符串以 UTF-8 长度前缀形式追加到哈希输入，避免字段拼接歧义。
     /// </summary>

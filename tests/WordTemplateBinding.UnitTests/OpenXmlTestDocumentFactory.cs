@@ -85,6 +85,26 @@ internal static class OpenXmlTestDocumentFactory
         return CreateDocument(table);
     }
 
+    /// <summary>创建带上下文标题、表头和样例数据行的业务表格。</summary>
+    internal static byte[] CreateBusinessTableDocument(
+        string context,
+        IReadOnlyList<string> headers,
+        params IReadOnlyList<string>[] rows)
+    {
+        Table table = new();
+        table.Append(new TableRow(headers.Select(value =>
+            new TableCell(new Paragraph(new Run(new Text(value)))))));
+        foreach (IReadOnlyList<string> row in rows)
+        {
+            table.Append(new TableRow(row.Select(value =>
+                new TableCell(new Paragraph(new Run(new Text(value)))))));
+        }
+
+        return CreateDocument(
+            new Paragraph(new Run(new Text(context))),
+            table);
+    }
+
     /// <summary>
     /// 创建跨三个 Run 且首个 Run 包含字体、字号、粗体、斜体和颜色的 DOCX。
     /// </summary>
@@ -588,6 +608,22 @@ internal static class OpenXmlTestDocumentFactory
         Run run = document.MainDocumentPart?.Document?.Body?.Descendants<Run>().First()
             ?? throw new InvalidOperationException("测试文档不包含 Run。");
         return (Run)run.CloneNode(true);
+    }
+
+    /// <summary>读取首个表格的全部单元格文本。</summary>
+    internal static IReadOnlyList<IReadOnlyList<string>> ReadFirstTableRows(byte[] bytes)
+    {
+        using MemoryStream stream = new(bytes, writable: false);
+        using WordprocessingDocument document = WordprocessingDocument.Open(stream, false);
+        Table table = document.MainDocumentPart?.Document?.Body?.Descendants<Table>().First()
+            ?? throw new InvalidOperationException("测试文档不包含表格。");
+        return table.Elements<TableRow>()
+            .Select(row => (IReadOnlyList<string>)row.Elements<TableCell>()
+                .Select(cell => cell.InnerText)
+                .ToList()
+                .AsReadOnly())
+            .ToList()
+            .AsReadOnly();
     }
 
     /// <summary>

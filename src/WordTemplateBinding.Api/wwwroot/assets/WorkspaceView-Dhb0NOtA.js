@@ -1,1 +1,0 @@
-import{D as e,m as t,x as n}from"./index-DVVolmtN.js";import{t as r}from"./BindFieldsStep-D0xzQb9h.js";var i=n({__name:`WorkspaceView`,setup(n){return(n,i)=>(e(),t(r))}});export{i as default};

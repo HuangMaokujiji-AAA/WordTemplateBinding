@@ -31,6 +31,7 @@ export interface TemplateResponse {
 export interface TemplateImportSummary {
   textBindingsRestored: number;
   chartBindingsRestored: number;
+  tableBindingsRestored?: number;
   unresolvedPlaceholders: string[];
   warnings: string[];
 }
@@ -158,6 +159,7 @@ export interface TemplateStudioSummary {
   warningElementCount: number;
   unsupportedElementCount: number;
   chartCount: number;
+  tableCount: number;
   boundElementCount: number;
   requiredMissingCount: number;
 }

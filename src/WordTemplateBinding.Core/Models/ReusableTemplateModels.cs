@@ -69,6 +69,11 @@ public sealed record TemplateImportSummary
     public int ChartBindingsRestored { get; init; }
 
     /// <summary>
+    /// 获取成功恢复的表格绑定数量。
+    /// </summary>
+    public int TableBindingsRestored { get; init; }
+
+    /// <summary>
     /// 获取当前 Schema 中不存在的占位符或清单字段路径。
     /// </summary>
     public IReadOnlyList<string> UnresolvedPlaceholders { get; init; } = Array.Empty<string>();

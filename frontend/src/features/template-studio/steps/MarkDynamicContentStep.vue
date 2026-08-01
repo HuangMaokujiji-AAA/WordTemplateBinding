@@ -153,6 +153,10 @@ onMounted(() => void loadWorkspace());
           <span>Word 原生图表</span>
         </div>
         <div class="studio-metric">
+          <strong>{{ workspace.summary.tableCount }}</strong>
+          <span>自动识别表格</span>
+        </div>
+        <div class="studio-metric">
           <strong>{{ workspace.summary.unsupportedElementCount }}</strong>
           <span>不支持或需处理</span>
         </div>

@@ -1,1 +1,0 @@
-import{n as e}from"./httpClient-BFSaBtAY.js";async function t(t){return e(`/api/binding-sets/${encodeURIComponent(t)}/reports`,{method:`POST`},`report_generated.docx`)}async function n(t){return e(`/api/binding-sets/${encodeURIComponent(t)}/export-reusable`,{method:`POST`},`template-template.docx`)}export{n,t};

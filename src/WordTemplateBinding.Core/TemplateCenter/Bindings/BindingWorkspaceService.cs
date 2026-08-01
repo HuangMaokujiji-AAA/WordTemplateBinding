@@ -112,6 +112,10 @@ public sealed class BindingWorkspaceService
         ValidateOptionalJson(request.FormatConfigJson, "FormatConfigJson");
         ValidateOptionalJson(request.FallbackValueJson, "FallbackValueJson");
         ValidateCompatibility(context.Element, context.Field);
+        if (string.Equals(context.Element.ElementType, "TABLE", StringComparison.Ordinal))
+        {
+            ValidateTableMapping(request.FormatConfigJson);
+        }
         BindingItemRecord saved = await _items.UpsertAsync(
             bindingSetId,
             templateElementId,
@@ -308,18 +312,52 @@ public sealed class BindingWorkspaceService
             ?? throw new TemplatePersistenceException(
                 "template_element_not_found",
                 $"找不到模板元素：{elementId}。");
-        EnsureElementBindable(element);
+        IReadOnlyList<DataFieldRecord> fields = await ListSuggestionFieldsAsync(
+            dataSourceId,
+            cancellationToken);
+        return BuildSuggestions(element, fields);
+    }
+
+    public async Task<IReadOnlyDictionary<ulong, IReadOnlyList<BindingSuggestion>>>
+        SuggestManyAsync(
+            IReadOnlyList<TemplateElementRecord> elements,
+            ulong dataSourceId,
+            CancellationToken cancellationToken)
+    {
+        IReadOnlyList<DataFieldRecord> fields = await ListSuggestionFieldsAsync(
+            dataSourceId,
+            cancellationToken);
+        Dictionary<ulong, IReadOnlyList<BindingSuggestion>> suggestions = new();
+        foreach (TemplateElementRecord element in elements)
+        {
+            suggestions[element.Id] = BuildSuggestions(element, fields);
+        }
+
+        return suggestions;
+    }
+
+    private async Task<IReadOnlyList<DataFieldRecord>> ListSuggestionFieldsAsync(
+        ulong dataSourceId,
+        CancellationToken cancellationToken)
+    {
         DataSnapshotRecord snapshot = await _snapshots.GetLatestReadyAsync(
             dataSourceId,
             cancellationToken)
             ?? throw new WorkspaceException(
                 "data_snapshot_not_ready",
                 $"数据源 {dataSourceId} 尚无 READY 快照。");
-        IReadOnlyList<DataFieldRecord> fields = await _fields.ListAsync(
+        return await _fields.ListAsync(
             snapshot.Id,
             null,
             5000,
             cancellationToken);
+    }
+
+    private IReadOnlyList<BindingSuggestion> BuildSuggestions(
+        TemplateElementRecord element,
+        IReadOnlyList<DataFieldRecord> fields)
+    {
+        EnsureElementBindable(element);
         string displayName = element.DisplayName ?? element.ElementKey;
         string normalizedDisplay = NormalizeName(displayName);
         HashSet<string> aliases = _suggestions.Aliases.TryGetValue(
@@ -509,6 +547,12 @@ public sealed class BindingWorkspaceService
         {
             throw new BindingValidationException("图表元素必须绑定 Array 字段。");
         }
+
+        if (string.Equals(element.ElementType, "TABLE", StringComparison.Ordinal) &&
+            field.DataType != DataValueType.Array)
+        {
+            throw new BindingValidationException("表格元素必须绑定 Array 字段。");
+        }
     }
 
     private static bool TryReadMockDataType(
@@ -560,6 +604,37 @@ public sealed class BindingWorkspaceService
         }
     }
 
+    private static void ValidateTableMapping(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            throw new BindingValidationException("表格元素必须提供列映射配置。");
+        }
+
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(json);
+            JsonElement root = document.RootElement;
+            if (root.TryGetProperty("tableMapping", out JsonElement tableMapping))
+            {
+                root = tableMapping;
+            }
+
+            if (root.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty("columns", out JsonElement columns) ||
+                columns.ValueKind != JsonValueKind.Array ||
+                columns.GetArrayLength() == 0)
+            {
+                throw new BindingValidationException("表格列映射不能为空。");
+            }
+        }
+        catch (JsonException exception)
+        {
+            throw new BindingValidationException(
+                $"表格列映射配置无效：{exception.Message}");
+        }
+    }
+
     private static BindingSuggestion ScoreSuggestion(
         TemplateElementRecord element,
         DataFieldRecord field,
@@ -569,6 +644,15 @@ public sealed class BindingWorkspaceService
     {
         List<string> reasons = new();
         int score = 0;
+        string? suggestedSourcePath = ReadSuggestedSourcePath(element.BindingSchemaJson);
+        if (string.Equals(
+                suggestedSourcePath,
+                field.FieldPath,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            score += 80;
+            reasons.Add("命中模板自动识别的数据集合");
+        }
         string leaf = field.FieldPath.Split('.').Last();
         string normalizedFieldName = NormalizeName(field.FieldName);
         string normalizedLeaf = NormalizeName(leaf);
@@ -595,7 +679,15 @@ public sealed class BindingWorkspaceService
             reasons.Add("命中配置同义词");
         }
 
-        bool typeCompatible = string.Equals(element.ElementType, "CHART", StringComparison.Ordinal)
+        bool collectionTarget = string.Equals(
+                                    element.ElementType,
+                                    "CHART",
+                                    StringComparison.Ordinal) ||
+                                string.Equals(
+                                    element.ElementType,
+                                    "TABLE",
+                                    StringComparison.Ordinal);
+        bool typeCompatible = collectionTarget
             ? field.DataType == DataValueType.Array
             : field.DataType is not (
                 DataValueType.Array or DataValueType.Object or DataValueType.Binary);
@@ -614,6 +706,28 @@ public sealed class BindingWorkspaceService
             field.FieldPath,
             Math.Min(score, 100),
             reasons.AsReadOnly());
+    }
+
+    private static string? ReadSuggestedSourcePath(string? bindingSchemaJson)
+    {
+        if (string.IsNullOrWhiteSpace(bindingSchemaJson))
+        {
+            return null;
+        }
+
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(bindingSchemaJson);
+            return document.RootElement.TryGetProperty(
+                    "suggestedSourcePath",
+                    out JsonElement value)
+                ? value.GetString()
+                : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private static string NormalizeName(string value) =>
@@ -654,4 +768,3 @@ public sealed class BindingWorkspaceService
 }
 
 #pragma warning restore CS1591
-

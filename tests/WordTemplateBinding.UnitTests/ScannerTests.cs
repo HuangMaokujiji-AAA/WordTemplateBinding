@@ -187,6 +187,56 @@ public sealed class ScannerTests
         Assert.Equal("76.5", Assert.Single(result.MockItems).MockValue);
     }
 
+    /// <summary>验证学院专业表会作为一个数组表格识别，并生成列映射与学院上下文。</summary>
+    [Fact]
+    public async Task ScanAsync_CollegeMajorTable_ReturnsBindableTable()
+    {
+        byte[] bytes = OpenXmlTestDocumentFactory.CreateBusinessTableDocument(
+            "2. 电子工程学院（大气探测学院）基本信息",
+            new[]
+            {
+                "序号", "专业代码", "专业名称", "学位门类", "设置年份",
+                "是否新专业", "专业学生数", "专任教师数", "监测结果",
+            },
+            new[]
+            {
+                "1", "070601", "大气科学", "理学", "1979",
+                "否", "1031", "76", "特色",
+            });
+
+        TemplateScanResult result = await _scanner.ScanAsync(bytes);
+
+        TableTemplateItem table = Assert.Single(result.Tables);
+        Assert.True(table.IsBindable);
+        Assert.Equal("majorColleges", table.SuggestedSourcePath);
+        Assert.Equal("电子工程学院（大气探测学院）", table.ContextLabel);
+        Assert.Equal("majorCode", table.Columns[1].SuggestedField);
+        Assert.Equal("monitoringDisplay", table.Columns[8].SuggestedField);
+        Assert.DoesNotContain(result.MockItems, item => item.MockValue == "070601");
+    }
+
+    /// <summary>验证项目内的 2024 高校报告模板可完整识别 19 张业务表格。</summary>
+    [Fact]
+    public async Task ScanAsync_HigherEducationReferenceTemplate_RecognizesAllTables()
+    {
+        string path = Path.GetFullPath(
+            Path.Combine(
+                AppContext.BaseDirectory,
+                "../../../../../docs/四川省高校本科专业教学质量监测报告_彩色_2024(成都信息工程大学)-1.docx"));
+        byte[] bytes = await File.ReadAllBytesAsync(path);
+
+        TemplateScanResult result = await _scanner.ScanAsync(bytes);
+
+        Assert.Equal(19, result.Tables.Count);
+        Assert.All(result.Tables, table => Assert.True(table.IsBindable));
+        Assert.Equal(
+            16,
+            result.Tables.Count(table => table.SuggestedSourcePath == "majorColleges"));
+        Assert.Contains(
+            result.Tables,
+            table => table.ContextLabel == "人工智能学院（区块链产业学院）");
+    }
+
     /// <summary>
     /// 验证不含小数点的普通整数会作为整数模拟数据识别。
     /// </summary>

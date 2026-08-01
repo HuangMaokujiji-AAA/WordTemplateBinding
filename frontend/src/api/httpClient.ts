@@ -8,8 +8,16 @@ export async function parseError(response: Response): Promise<never> {
     const problem = (await response.json()) as {
       detail?: string;
       title?: string;
+      errorCode?: string;
+      errors?: Record<string, string[]>;
     };
-    message = problem.detail || problem.title || message;
+    const validationMessage = problem.errors
+      ? Object.values(problem.errors).flat().filter(Boolean).join("；")
+      : "";
+    message = problem.detail || validationMessage || problem.title || message;
+    if (problem.errorCode) {
+      message = `${message}（${problem.errorCode}）`;
+    }
   } catch {
     // Keep the generic message when the response is not ProblemDetails JSON.
   }
@@ -91,4 +99,3 @@ export interface PagedResponse<T> {
   page: number;
   pageSize: number;
 }
-

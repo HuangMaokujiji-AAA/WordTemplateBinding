@@ -45,3 +45,17 @@ export interface DataFieldRecord {
   displayOrder: number;
 }
 
+export interface HigherEducationSchool {
+  collectionYear: string;
+  schoolCode: string;
+  schoolName: string;
+}
+
+export interface HigherEducationDataSourceResult {
+  source: DataSourceRecord;
+  snapshot: {
+    id: string;
+    snapshotStatus: string;
+    rowCount: number | null;
+  };
+}

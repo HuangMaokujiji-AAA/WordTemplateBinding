@@ -146,12 +146,12 @@ public sealed class BindingSetDocumentService
 
             string runtimeDataPath = $"binding:{item.Id}";
             values[runtimeDataPath] = value;
-            BindingTargetKind targetKind = string.Equals(
-                element.ElementType,
-                "CHART",
-                StringComparison.Ordinal)
-                ? BindingTargetKind.Chart
-                : BindingTargetKind.Text;
+            BindingTargetKind targetKind = element.ElementType.ToUpperInvariant() switch
+            {
+                "CHART" => BindingTargetKind.Chart,
+                "TABLE" => BindingTargetKind.Table,
+                _ => BindingTargetKind.Text,
+            };
             TemplateBinding binding = new()
             {
                 TemplateId = Guid.Empty,
@@ -162,11 +162,17 @@ public sealed class BindingSetDocumentService
                 ChartMapping = targetKind == BindingTargetKind.Chart
                     ? DeserializeChartMapping(item.FormatConfigJson)
                     : null,
+                TableMapping = targetKind == BindingTargetKind.Table
+                    ? DeserializeTableMapping(item.FormatConfigJson)
+                    : null,
                 CreatedAt = item.CreatedAt,
                 UpdatedAt = item.UpdatedAt,
             };
             reportBindings.Add(binding);
-            reusableBindings.Add(binding with { DataPath = item.SourcePath });
+            if (targetKind != BindingTargetKind.Table)
+            {
+                reusableBindings.Add(binding with { DataPath = item.SourcePath });
+            }
         }
 
         await using TemporaryFileLease lease =
@@ -334,6 +340,43 @@ public sealed class BindingSetDocumentService
         {
             throw new BindingValidationException(
                 $"图表 format_config_json 无效：{exception.Message}");
+        }
+    }
+
+    private static TableBindingMapping DeserializeTableMapping(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            throw new BindingValidationException("表格绑定缺少 format_config_json。");
+        }
+
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(json);
+            JsonElement root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                throw new BindingValidationException(
+                    "表格 format_config_json 必须是 JSON 对象。");
+            }
+
+            if (root.TryGetProperty("tableMapping", out JsonElement wrapped))
+            {
+                root = wrapped;
+            }
+
+            TableBindingMapping? mapping = root.Deserialize<TableBindingMapping>(JsonOptions);
+            if (mapping is null || mapping.Columns.Count == 0)
+            {
+                throw new BindingValidationException("表格列映射不能为空。");
+            }
+
+            return mapping;
+        }
+        catch (JsonException exception)
+        {
+            throw new BindingValidationException(
+                $"表格 format_config_json 无效：{exception.Message}");
         }
     }
 

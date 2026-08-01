@@ -148,6 +148,9 @@ public static class ServiceCollectionExtensions
             ConfigurationDataConnectionCredentialResolver>();
         services.AddSingleton<IDataSourceConnectionFactory, MySqlDataSourceConnectionFactory>();
         services.AddSingleton<IDatabaseSchemaIntrospector, MySqlSchemaIntrospector>();
+        services.AddSingleton<
+            IHigherEducationReportDataProvider,
+            MySqlHigherEducationReportDataProvider>();
 
         if (string.Equals(persistence.Mode, "InMemory", StringComparison.OrdinalIgnoreCase))
         {

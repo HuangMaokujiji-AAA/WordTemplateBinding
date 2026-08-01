@@ -74,6 +74,19 @@ public sealed class WordTemplateScanner : IWordTemplateScanner
             List<string> paragraphTexts = new();
             List<MockDataItem> mockItems = new();
             List<TemplateParseWarning> warnings = new();
+            IReadOnlyList<TableTemplateItem> tables = OpenXmlTableReader.Read(
+                body,
+                contentHash,
+                _locatorIdGenerator);
+            IReadOnlyList<Table> mainDocumentTables = body.Descendants<Table>()
+                .Where(table => !table.Ancestors<Table>().Any())
+                .ToList()
+                .AsReadOnly();
+            IReadOnlySet<Table> recognizedTables = tables
+                .Where(item => item.Locator.TableIndex >= 0 &&
+                               item.Locator.TableIndex < mainDocumentTables.Count)
+                .Select(item => mainDocumentTables[item.Locator.TableIndex])
+                .ToHashSet();
 
             ScanPartAndTextBoxes(
                 body,
@@ -82,7 +95,8 @@ public sealed class WordTemplateScanner : IWordTemplateScanner
                 contentHash,
                 paragraphTexts,
                 mockItems,
-                cancellationToken);
+                cancellationToken,
+                recognizedTables);
 
             foreach (HeaderPart headerPart in mainPart.HeaderParts
                          .OrderBy(part => part.Uri.OriginalString, StringComparer.Ordinal))
@@ -96,7 +110,8 @@ public sealed class WordTemplateScanner : IWordTemplateScanner
                         contentHash,
                         paragraphTexts,
                         mockItems,
-                        cancellationToken);
+                        cancellationToken,
+                        recognizedTables: null);
                 }
             }
 
@@ -112,7 +127,8 @@ public sealed class WordTemplateScanner : IWordTemplateScanner
                         contentHash,
                         paragraphTexts,
                         mockItems,
-                        cancellationToken);
+                        cancellationToken,
+                        recognizedTables: null);
                 }
             }
 
@@ -125,7 +141,8 @@ public sealed class WordTemplateScanner : IWordTemplateScanner
                     contentHash,
                     paragraphTexts,
                     mockItems,
-                    cancellationToken);
+                    cancellationToken,
+                    recognizedTables: null);
             }
 
             if (mainPart.EndnotesPart?.Endnotes is { } endnotes)
@@ -137,7 +154,8 @@ public sealed class WordTemplateScanner : IWordTemplateScanner
                     contentHash,
                     paragraphTexts,
                     mockItems,
-                    cancellationToken);
+                    cancellationToken,
+                    recognizedTables: null);
             }
 
             if (FindThemeFill(document))
@@ -152,7 +170,7 @@ public sealed class WordTemplateScanner : IWordTemplateScanner
                 contentHash,
                 _locatorIdGenerator);
             ReusableTemplateManifest manifest = ReusableTemplateManifestSerializer.Read(mainPart);
-            if (mockItems.Count == 0 && charts.Count == 0)
+            if (mockItems.Count == 0 && charts.Count == 0 && tables.Count == 0)
             {
                 warnings.Add(new TemplateParseWarning(
                     "NO_BINDABLE_ELEMENTS",
@@ -165,6 +183,7 @@ public sealed class WordTemplateScanner : IWordTemplateScanner
                 ContentHash = contentHash,
                 MockItems = readOnlyItems,
                 Charts = charts,
+                Tables = tables,
                 Preview = _previewBuilder.Build(paragraphTexts.AsReadOnly(), readOnlyItems),
                 BindingManifest = manifest,
                 Warnings = warnings.AsReadOnly(),
@@ -199,7 +218,8 @@ public sealed class WordTemplateScanner : IWordTemplateScanner
         string contentHash,
         ICollection<string> paragraphTexts,
         ICollection<MockDataItem> mockItems,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlySet<Table>? recognizedTables)
     {
         ScanPart(
             OpenXmlDocumentHelpers.GetTextParagraphs(root),
@@ -208,7 +228,8 @@ public sealed class WordTemplateScanner : IWordTemplateScanner
             contentHash,
             paragraphTexts,
             mockItems,
-            cancellationToken);
+            cancellationToken,
+            recognizedTables);
 
         IReadOnlyList<TextBoxContent> textBoxes = root
             .Descendants<TextBoxContent>()
@@ -232,7 +253,8 @@ public sealed class WordTemplateScanner : IWordTemplateScanner
                 contentHash,
                 paragraphTexts,
                 mockItems,
-                cancellationToken);
+                cancellationToken,
+                recognizedTables: null);
         }
     }
 
@@ -243,7 +265,8 @@ public sealed class WordTemplateScanner : IWordTemplateScanner
         string contentHash,
         ICollection<string> paragraphTexts,
         ICollection<MockDataItem> mockItems,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlySet<Table>? recognizedTables)
     {
         for (int paragraphIndex = 0; paragraphIndex < paragraphs.Count; paragraphIndex++)
         {
@@ -251,6 +274,13 @@ public sealed class WordTemplateScanner : IWordTemplateScanner
             ParagraphTextMap map = ParagraphTextMapBuilder.Build(paragraphs[paragraphIndex]);
             int previewParagraphIndex = paragraphTexts.Count;
             paragraphTexts.Add(map.FullText);
+
+            if (recognizedTables is not null &&
+                paragraphs[paragraphIndex].Ancestors<Table>()
+                    .Any(recognizedTables.Contains))
+            {
+                continue;
+            }
 
             List<RecognizedMockData> recognized = ResolveOverlaps(
                 _recognizers.SelectMany(recognizer => recognizer

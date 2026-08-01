@@ -1,0 +1,1 @@
+import{D as e,m as t,x as n}from"./index-_geUt24t.js";import{t as r}from"./BindFieldsStep-YGGNt7zf.js";var i=n({__name:`WorkspaceView`,setup(n){return(n,i)=>(e(),t(r))}});export{i as default};

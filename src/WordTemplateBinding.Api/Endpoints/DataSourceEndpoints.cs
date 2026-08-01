@@ -13,6 +13,7 @@ public static class DataSourceEndpoints
         this IEndpointRouteBuilder endpoints)
     {
         MapSources(endpoints);
+        MapHigherEducation(endpoints);
         return endpoints;
     }
 
@@ -44,6 +45,27 @@ public static class DataSourceEndpoints
                     request.ObjectType,
                     request.ObjectName,
                     cancellationToken))));
+        sources.MapPost("/higher-education", async (
+            CreateHigherEducationDataSourceRequest request,
+            DataSourceWorkspaceService service,
+            CancellationToken cancellationToken) =>
+        {
+            HigherEducationDataSourceResult result =
+                await service.CreateHigherEducationAsync(
+                    DatabaseIdParser.Required(request.ProjectId, nameof(request.ProjectId)),
+                    request.CollectionYear,
+                    request.SchoolCode,
+                    request.SourceCode,
+                    request.SourceName,
+                    cancellationToken);
+            return Results.Created(
+                $"/api/data-sources/{result.Source.Id}",
+                new
+                {
+                    source = PersistentApiMapper.DataSource(result.Source),
+                    snapshot = PersistentApiMapper.Snapshot(result.Snapshot),
+                });
+        });
         sources.MapPost("/{dataSourceId}/refresh", async (
             string dataSourceId,
             DataSourceWorkspaceService service,
@@ -91,7 +113,43 @@ public static class DataSourceEndpoints
                 cancellationToken));
         });
     }
+
+    private static void MapHigherEducation(IEndpointRouteBuilder endpoints)
+    {
+        RouteGroupBuilder group = endpoints.MapGroup("/api/higher-education")
+            .WithTags("Higher education monitoring");
+        group.MapGet("/years", async (
+            DataSourceWorkspaceService service,
+            CancellationToken cancellationToken) =>
+            Results.Ok(await service.ListHigherEducationYearsAsync(cancellationToken)));
+        group.MapGet("/schools", async (
+            string collectionYear,
+            DataSourceWorkspaceService service,
+            CancellationToken cancellationToken) =>
+            Results.Ok(await service.ListHigherEducationSchoolsAsync(
+                collectionYear,
+                cancellationToken)));
+        group.MapGet("/report", async (
+            string collectionYear,
+            string schoolCode,
+            DataSourceWorkspaceService service,
+            CancellationToken cancellationToken) =>
+        {
+            HigherEducationReportData report =
+                await service.GetHigherEducationReportAsync(
+                    collectionYear,
+                    schoolCode,
+                    cancellationToken);
+            return Results.Ok(new
+            {
+                report.CollectionYear,
+                report.SchoolCode,
+                report.SchoolName,
+                report.RowCount,
+                data = report.Content,
+            });
+        });
+    }
 }
 
 #pragma warning restore CS1591
-

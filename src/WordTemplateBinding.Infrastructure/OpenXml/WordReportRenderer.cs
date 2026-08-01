@@ -55,6 +55,8 @@ public sealed class WordReportRenderer : IWordReportRenderer
                     .ToDictionary(item => item.LocatorId, StringComparer.Ordinal);
                 Dictionary<string, ChartTemplateItem> chartItems = template.ScanResult.Charts
                     .ToDictionary(item => item.LocatorId, StringComparer.Ordinal);
+                Dictionary<string, TableTemplateItem> tableItems = template.ScanResult.Tables
+                    .ToDictionary(item => item.LocatorId, StringComparer.Ordinal);
                 List<ReplacementInstruction> replacements = BuildReplacementInstructions(
                     bindings.Where(binding => binding.TargetKind == BindingTargetKind.Text).ToList(),
                     values,
@@ -113,6 +115,43 @@ public sealed class WordReportRenderer : IWordReportRenderer
                             // Legacy: use ChartDataSetParser for backward compatibility
                             OpenXmlChartWriter.Write(mainPart, chartItem, chartValue);
                         }
+                    }
+                    catch (Exception exception) when (
+                        exception is FormatException or InvalidCastException or OverflowException)
+                    {
+                        throw new DataValueConversionException(binding.DataPath, exception);
+                    }
+                }
+
+                foreach (TemplateBinding binding in bindings.Where(
+                             binding => binding.TargetKind == BindingTargetKind.Table))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!tableItems.TryGetValue(
+                            binding.LocatorId,
+                            out TableTemplateItem? tableItem))
+                    {
+                        throw new LocatorNotFoundException(binding.LocatorId);
+                    }
+
+                    if (!values.TryGetValue(binding.DataPath, out object? tableValue))
+                    {
+                        throw new MissingDataValueException(binding.DataPath);
+                    }
+
+                    if (binding.TableMapping is null)
+                    {
+                        throw new ReportRenderingException(
+                            $"表格 {tableItem.Title} 缺少列映射配置。");
+                    }
+
+                    try
+                    {
+                        OpenXmlTableWriter.Write(
+                            mainPart,
+                            tableItem,
+                            tableValue,
+                            binding.TableMapping);
                     }
                     catch (Exception exception) when (
                         exception is FormatException or InvalidCastException or OverflowException)

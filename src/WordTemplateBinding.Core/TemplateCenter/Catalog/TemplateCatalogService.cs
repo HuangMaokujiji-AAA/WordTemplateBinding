@@ -328,7 +328,7 @@ public sealed class TemplateCatalogService
         IReadOnlyList<TemplateSegmentRecord> segmentRecords)
     {
         List<TemplateElementRecord> result =
-            new(scanResult.MockItems.Count + scanResult.Charts.Count);
+            new(scanResult.MockItems.Count + scanResult.Charts.Count + scanResult.Tables.Count);
         int sort = 0;
         Dictionary<string, TemplateSegmentRecord> recordsByKey = segmentRecords
             .ToDictionary(item => item.SegmentKey, StringComparer.Ordinal);
@@ -437,6 +437,78 @@ public sealed class TemplateCatalogService
             });
         }
 
+        foreach (TableTemplateItem table in scanResult.Tables)
+        {
+            TemplateSegmentRecord? assigned = FindTableSegment(
+                table,
+                segmentScan.Segments,
+                recordsByKey);
+            IReadOnlyList<TableColumnBinding> columns = table.Columns
+                .Where(column => !string.IsNullOrWhiteSpace(column.SuggestedField))
+                .Select(column => new TableColumnBinding
+                {
+                    ColumnIndex = column.ColumnIndex,
+                    Header = column.Header,
+                    SourceField = column.SuggestedField!,
+                    FallbackValue = column.SuggestedField is "monitoringDisplay" ? "-" : null,
+                })
+                .ToList()
+                .AsReadOnly();
+            result.Add(new TemplateElementRecord
+            {
+                Id = 0,
+                TemplateVersionId = versionId,
+                SegmentId = assigned?.Id,
+                ElementKey = $"table:{table.LocatorId}",
+                ElementType = "TABLE",
+                LocatorType = "OPENXML_TABLE",
+                DisplayName = table.Title,
+                LocatorJson = JsonSerializer.Serialize(
+                    new
+                    {
+                        locatorId = table.LocatorId,
+                        partKind = DocumentPartKind.MainDocument,
+                        table.Locator.PartKey,
+                        table.Locator.TableIndex,
+                        table.Locator.FirstParagraphIndex,
+                        table.Locator.HeaderSignature,
+                    },
+                    JsonOptions),
+                BindingSchemaJson = JsonSerializer.Serialize(
+                    new
+                    {
+                        targetProperty = "$",
+                        allowedTypes = new[] { "Array" },
+                        table.SuggestedSourcePath,
+                        table.ContextLabel,
+                        table.HeaderRowCount,
+                        table.TemplateRowCount,
+                        columns,
+                        filterField = string.Equals(
+                            table.SuggestedSourcePath,
+                            "majorColleges",
+                            StringComparison.Ordinal)
+                            ? "collegeName"
+                            : null,
+                        filterValue = string.Equals(
+                            table.SuggestedSourcePath,
+                            "majorColleges",
+                            StringComparison.Ordinal)
+                            ? table.ContextLabel
+                            : null,
+                    },
+                    JsonOptions),
+                DefaultValueJson = null,
+                IsRequired = false,
+                SortNo = sort++,
+                SegmentLocalOrder = NextLocalOrder(assigned?.Id, localOrders),
+                ParseStatus = table.IsBindable ? "VALID" : "UNSUPPORTED",
+                ParseMessage = table.IsBindable
+                    ? null
+                    : "未找到与该表头匹配的数据源字段规则。",
+            });
+        }
+
         return result;
     }
 
@@ -484,6 +556,20 @@ public sealed class TemplateCatalogService
         TemplateSegmentDefinition? definition = definitions
             .Where(segment => segment.MainDocumentChartRelationshipIds.Contains(
                 chart.Locator.RelationshipId))
+            .OrderByDescending(segment => segment.Depth)
+            .ThenBy(segment => segment.DocumentOrderEnd - segment.DocumentOrderStart)
+            .FirstOrDefault();
+        return definition is null ? null : records.GetValueOrDefault(definition.SegmentKey);
+    }
+
+    private static TemplateSegmentRecord? FindTableSegment(
+        TableTemplateItem table,
+        IReadOnlyList<TemplateSegmentDefinition> definitions,
+        IReadOnlyDictionary<string, TemplateSegmentRecord> records)
+    {
+        TemplateSegmentDefinition? definition = definitions
+            .Where(segment => segment.MainDocumentParagraphIndexes.Contains(
+                table.Locator.FirstParagraphIndex))
             .OrderByDescending(segment => segment.Depth)
             .ThenBy(segment => segment.DocumentOrderEnd - segment.DocumentOrderStart)
             .FirstOrDefault();

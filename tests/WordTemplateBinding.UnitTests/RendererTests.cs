@@ -183,6 +183,101 @@ public sealed class RendererTests
             StringComparison.Ordinal);
     }
 
+    /// <summary>验证数组表格按学院过滤后复制样例行，并保留表头。</summary>
+    [Fact]
+    public async Task RenderAsync_TableBinding_RepeatsAndFiltersRows()
+    {
+        byte[] bytes = OpenXmlTestDocumentFactory.CreateBusinessTableDocument(
+            "1. 大气科学学院基本信息",
+            new[]
+            {
+                "序号", "专业代码", "专业名称", "学位门类", "设置年份",
+                "是否新专业", "专业学生数", "专任教师数", "监测结果",
+            },
+            new[]
+            {
+                "1", "000000", "样例专业", "理学", "2000",
+                "否", "0", "0", "-",
+            });
+        TemplateScanResult scan = await _scanner.ScanAsync(bytes);
+        TemplateDocument template = TestServiceFactory.CreateTemplate(bytes, scan);
+        TableTemplateItem table = Assert.Single(scan.Tables);
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        TemplateBinding binding = new()
+        {
+            TemplateId = template.Id,
+            TargetKind = BindingTargetKind.Table,
+            LocatorId = table.LocatorId,
+            DataPath = "majorColleges",
+            DataType = DataValueType.Array,
+            TableMapping = new TableBindingMapping
+            {
+                HeaderRowCount = 1,
+                FilterField = "collegeName",
+                FilterValue = "大气科学学院",
+                Columns = table.Columns
+                    .Where(column => column.SuggestedField is not null)
+                    .Select(column => new TableColumnBinding
+                    {
+                        ColumnIndex = column.ColumnIndex,
+                        Header = column.Header,
+                        SourceField = column.SuggestedField!,
+                        FallbackValue = "-",
+                    })
+                    .ToList(),
+            },
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        IReadOnlyList<IReadOnlyDictionary<string, object?>> rows =
+            new IReadOnlyDictionary<string, object?>[]
+            {
+                new Dictionary<string, object?>
+                {
+                    ["collegeName"] = "大气科学学院",
+                    ["majorCode"] = "070601",
+                    ["majorName"] = "大气科学",
+                    ["degreeCategory"] = "理学",
+                    ["majorEstablishmentYears"] = "1979",
+                    ["isNewMajor"] = "否",
+                    ["studentCount"] = 1031,
+                    ["fullTimeTeacherCount"] = 76,
+                    ["monitoringDisplay"] = "特色",
+                },
+                new Dictionary<string, object?>
+                {
+                    ["collegeName"] = "其他学院",
+                    ["majorCode"] = "999999",
+                    ["majorName"] = "不应出现",
+                },
+                new Dictionary<string, object?>
+                {
+                    ["collegeName"] = "大气科学学院",
+                    ["majorCode"] = "070602",
+                    ["majorName"] = "应用气象学",
+                    ["degreeCategory"] = "理学",
+                    ["majorEstablishmentYears"] = "2009",
+                    ["isNewMajor"] = "否",
+                    ["studentCount"] = 313,
+                    ["fullTimeTeacherCount"] = 27,
+                    ["monitoringDisplay"] = "特色",
+                },
+            };
+
+        RenderedReport report = await _renderer.RenderAsync(
+            template,
+            new[] { binding },
+            new Dictionary<string, object?> { [binding.DataPath] = rows });
+
+        IReadOnlyList<IReadOnlyList<string>> output =
+            OpenXmlTestDocumentFactory.ReadFirstTableRows(report.GetBytesCopy());
+        Assert.Equal(3, output.Count);
+        Assert.Equal("专业代码", output[0][1]);
+        Assert.Equal(new[] { "1", "070601", "大气科学" }, output[1].Take(3));
+        Assert.Equal(new[] { "2", "070602", "应用气象学" }, output[2].Take(3));
+        Assert.DoesNotContain(output.SelectMany(row => row), value => value == "不应出现");
+    }
+
     /// <summary>
     /// 验证无空格整数模拟值可以替换为整数字段值。
     /// </summary>

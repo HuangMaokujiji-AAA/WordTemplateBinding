@@ -1031,14 +1031,20 @@ public sealed class MySqlDataFieldRepository : IDataFieldRepository
         CancellationToken cancellationToken)
     {
         const string sql = """
-            SELECT id, snapshot_id, field_path, field_name, data_type, is_array,
-                   is_nullable, sample_value_json, display_order
-            FROM rp_data_field
-            WHERE snapshot_id = @snapshotId
-              AND (@query IS NULL OR field_name LIKE CONCAT('%', @query, '%')
-                   OR field_path LIKE CONCAT('%', @query, '%'))
-            ORDER BY display_order, id
-            LIMIT @limit;
+            SELECT field.id, field.snapshot_id, field.field_path, field.field_name,
+                   field.data_type, field.is_array, field.is_nullable,
+                   field.sample_value_json, field.display_order
+            FROM
+            (
+                SELECT id
+                FROM rp_data_field
+                WHERE snapshot_id = @snapshotId
+                  AND (@query IS NULL OR field_name LIKE CONCAT('%', @query, '%')
+                       OR field_path LIKE CONCAT('%', @query, '%'))
+                ORDER BY display_order, id
+                LIMIT @limit
+            ) AS selected
+            INNER JOIN rp_data_field AS field ON field.id = selected.id;
             """;
         await using MySqlConnection connection =
             await _connections.OpenConnectionAsync(cancellationToken);
@@ -1053,7 +1059,11 @@ public sealed class MySqlDataFieldRepository : IDataFieldRepository
             records.Add(Map(reader));
         }
 
-        return records.AsReadOnly();
+        return records
+            .OrderBy(record => record.DisplayOrder)
+            .ThenBy(record => record.Id)
+            .ToList()
+            .AsReadOnly();
     }
 
     public async Task<DataFieldRecord?> FindAsync(

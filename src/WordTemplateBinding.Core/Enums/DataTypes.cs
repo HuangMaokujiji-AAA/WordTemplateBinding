@@ -81,4 +81,9 @@ public enum BindingTargetKind
     /// Word 原生图表部件。
     /// </summary>
     Chart = 2,
+
+    /// <summary>
+    /// 可由数组数据重复填充的 Word 表格。
+    /// </summary>
+    Table = 3,
 }

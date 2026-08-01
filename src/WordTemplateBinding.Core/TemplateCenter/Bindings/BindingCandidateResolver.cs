@@ -1,4 +1,5 @@
 #pragma warning disable CS1591
+using System.Text.Json;
 using WordTemplateBinding.Core.Interfaces;
 using WordTemplateBinding.Core.Models;
 
@@ -33,17 +34,19 @@ public sealed class BindingCandidateResolver : IBindingCandidateResolver
         IReadOnlyList<TemplateElementRecord> elements = await _elements.ListAsync(
             set.TemplateVersionId,
             cancellationToken);
+        IReadOnlyDictionary<ulong, IReadOnlyList<BindingSuggestion>> suggestionIndex =
+            await _workspace.SuggestManyAsync(
+                elements,
+                dataSourceId,
+                cancellationToken);
         List<string> unresolved = new();
         List<string> warnings = new();
         int textCount = 0;
         int chartCount = 0;
+        int tableCount = 0;
         foreach (TemplateElementRecord element in elements)
         {
-            IReadOnlyList<BindingSuggestion> suggestions =
-                await _workspace.SuggestAsync(
-                    element.Id,
-                    dataSourceId,
-                    cancellationToken);
+            IReadOnlyList<BindingSuggestion> suggestions = suggestionIndex[element.Id];
             BindingSuggestion? best = suggestions.FirstOrDefault();
             if (best is null || best.Score < AutoBindThreshold)
             {
@@ -68,11 +71,16 @@ public sealed class BindingCandidateResolver : IBindingCandidateResolver
                     SourcePath = best.FieldPath,
                     TargetProperty = "$",
                     SourceKind = "DATA_SOURCE",
+                    FormatConfigJson = BuildTableFormatConfig(element),
                 },
                 cancellationToken);
             if (string.Equals(element.ElementType, "CHART", StringComparison.Ordinal))
             {
                 chartCount++;
+            }
+            else if (string.Equals(element.ElementType, "TABLE", StringComparison.Ordinal))
+            {
+                tableCount++;
             }
             else
             {
@@ -84,10 +92,48 @@ public sealed class BindingCandidateResolver : IBindingCandidateResolver
         {
             TextBindingsRestored = textCount,
             ChartBindingsRestored = chartCount,
+            TableBindingsRestored = tableCount,
             UnresolvedPlaceholders = unresolved.AsReadOnly(),
             Warnings = warnings.AsReadOnly(),
         };
     }
+
+    private static string? BuildTableFormatConfig(TemplateElementRecord element)
+    {
+        if (!string.Equals(element.ElementType, "TABLE", StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(element.BindingSchemaJson))
+        {
+            return null;
+        }
+
+        using JsonDocument document = JsonDocument.Parse(element.BindingSchemaJson);
+        JsonElement root = document.RootElement;
+        IReadOnlyList<TableColumnBinding> columns = root.GetProperty("columns")
+            .Deserialize<List<TableColumnBinding>>(JsonOptions)
+            ?? new List<TableColumnBinding>();
+        TableBindingMapping mapping = new()
+        {
+            HeaderRowCount = root.TryGetProperty("headerRowCount", out JsonElement headerRows)
+                ? headerRows.GetInt32()
+                : 1,
+            Columns = columns,
+            FilterField = root.TryGetProperty("filterField", out JsonElement filterField) &&
+                          filterField.ValueKind == JsonValueKind.String
+                ? filterField.GetString()
+                : null,
+            FilterValue = root.TryGetProperty("filterValue", out JsonElement filterValue) &&
+                          filterValue.ValueKind == JsonValueKind.String
+                ? filterValue.GetString()
+                : null,
+        };
+        return JsonSerializer.Serialize(new { tableMapping = mapping }, JsonOptions);
+    }
+
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = true,
+    };
 }
 
 #pragma warning restore CS1591

@@ -1,4 +1,8 @@
-import type { BindingItemRecord, BindingSetRecord } from "./types";
+import type {
+  BindingItemRecord,
+  BindingSetRecord,
+  TemplateImportSummary,
+} from "./types";
 import { requestJson } from "./httpClient";
 
 export function upsertBinding(
@@ -124,3 +128,14 @@ export function getBindingSuggestions(
   return requestJson(url);
 }
 
+export function resolveBindingCandidates(
+  bindingSetId: string,
+  dataSourceId: string
+): Promise<TemplateImportSummary> {
+  const url = new URL(
+    `/api/binding-sets/${encodeURIComponent(bindingSetId)}/resolve-candidates`,
+    window.location.origin
+  );
+  url.searchParams.set("dataSourceId", dataSourceId);
+  return requestJson<TemplateImportSummary>(url, { method: "POST" });
+}

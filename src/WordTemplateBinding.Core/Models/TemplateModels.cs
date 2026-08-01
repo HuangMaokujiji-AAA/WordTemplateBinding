@@ -85,6 +85,12 @@ public sealed record TemplateScanResult
     public required IReadOnlyList<ChartTemplateItem> Charts { get; init; }
 
     /// <summary>
+    /// 获取识别到的可重复填充 Word 表格。
+    /// </summary>
+    public IReadOnlyList<TableTemplateItem> Tables { get; init; } =
+        Array.Empty<TableTemplateItem>();
+
+    /// <summary>
     /// 获取结构化文本预览。
     /// </summary>
     public required DocumentPreview Preview { get; init; }
@@ -250,6 +256,11 @@ public sealed record TemplateBinding
     /// 获取图表字段映射配置，仅当 TargetKind=Chart 时有效。
     /// </summary>
     public ChartBindingMapping? ChartMapping { get; init; }
+
+    /// <summary>
+    /// 获取表格列映射和过滤配置，仅当 TargetKind=Table 时有效。
+    /// </summary>
+    public TableBindingMapping? TableMapping { get; init; }
 
     /// <summary>
     /// 获取绑定创建时间。

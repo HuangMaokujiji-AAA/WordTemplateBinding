@@ -11,6 +11,7 @@ public sealed record TemplateStudioSummary(
     int WarningElementCount,
     int UnsupportedElementCount,
     int ChartCount,
+    int TableCount,
     int BoundElementCount,
     int RequiredMissingCount);
 
@@ -90,6 +91,10 @@ public sealed class TemplateStudioService
             elements.Count(element => string.Equals(
                 element.ElementType,
                 "CHART",
+                StringComparison.OrdinalIgnoreCase)),
+            elements.Count(element => string.Equals(
+                element.ElementType,
+                "TABLE",
                 StringComparison.OrdinalIgnoreCase)),
             segments.Sum(segment => segment.BoundCount),
             segments.Sum(segment => segment.RequiredMissingCount));

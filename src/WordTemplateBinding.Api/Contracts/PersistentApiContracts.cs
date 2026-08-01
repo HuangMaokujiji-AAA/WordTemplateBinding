@@ -53,6 +53,13 @@ internal sealed record CreateDataSourceRequest(
     string ObjectType,
     string ObjectName);
 
+internal sealed record CreateHigherEducationDataSourceRequest(
+    string ProjectId,
+    string CollectionYear,
+    string SchoolCode,
+    string? SourceCode = null,
+    string? SourceName = null);
+
 internal sealed record CreateBindingSetRequest(
     string ChapterId,
     string TemplateVersionId);

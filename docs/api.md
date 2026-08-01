@@ -232,6 +232,44 @@ GET  /api/data-sources/{dataSourceId}/schema?query=
 
 刷新成功后创建不可变快照与字段目录。样例最多 20 行；Binary/BLOB 列不返回。
 
+### 高校监测聚合数据源
+
+高校报告数据直接读取 `report_platform` 中的 9 张 `he_*` 业务表：
+
+```http
+GET  /api/higher-education/years
+GET  /api/higher-education/schools?collectionYear=2024
+GET  /api/higher-education/report?collectionYear=2024&schoolCode=10621
+POST /api/data-sources/higher-education
+```
+
+创建项目数据源：
+
+```json
+{
+  "projectId": "1",
+  "collectionYear": "2024",
+  "schoolCode": "10621"
+}
+```
+
+`sourceCode` 和 `sourceName` 可省略。成功后会生成 `HIGHER_EDUCATION` 数据源和 READY
+快照，核心集合字段包括：
+
+- `undergraduateMajors`
+- `teachingMetrics`
+- `featuredMajors`
+- `warningMajors`
+- `majorColleges`
+- `majorMetrics.{专业代码}.level1RadarData`
+- `majorMetrics.{专业代码}.level2RadarData`
+- `majorMetrics.{专业代码}.level3RadarData`
+
+专业指标按专业代码分组，并转换成可直接绑定雷达图的长表数据。每行对应一个指标，
+四个数值系列依次为“平均值、最大值、最小值、本专业”；一级、二级、三级数组分别
+包含 3、9、24 行。旧的跨专业汇总路径不再发布，已有高校数据源需刷新快照并按专业
+重新绑定，避免把所有专业代码挤到同一张图中。
+
 ## 5. 绑定集
 
 ### 获取或创建草稿
@@ -289,6 +327,25 @@ DELETE /api/binding-sets/{bindingSetId}/items/{templateElementId}
   }
 }
 ```
+
+表格格式映射同样放在 `formatConfigJson`。系统扫描到已知表头时会自动生成该配置：
+
+```json
+{
+  "tableMapping": {
+    "headerRowCount": 1,
+    "filterField": "collegeName",
+    "filterValue": "大气科学学院",
+    "columns": [
+      { "columnIndex": 0, "sourceField": "rowNumber", "header": "序号" },
+      { "columnIndex": 1, "sourceField": "majorCode", "header": "专业代码" },
+      { "columnIndex": 2, "sourceField": "majorName", "header": "专业名称" }
+    ]
+  }
+}
+```
+
+生成报告时保留表头和样例行样式，按数组长度克隆数据行；学院表会按扫描到的标题自动过滤。
 
 ### 建议、预览和校验
 
