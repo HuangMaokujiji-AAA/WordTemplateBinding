@@ -4,3 +4,4 @@ export * from "./types/templates";
 export * from "./types/dataSources";
 export * from "./types/projects";
 export * from "./types/bindings";
+export * from "./types/table";

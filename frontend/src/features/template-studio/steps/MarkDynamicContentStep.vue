@@ -1,14 +1,18 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, nextTick, onMounted, ref } from "vue";
 import {
   getTemplateStudioWorkspace,
+  hydrateTemplateResponse,
   rescanTemplateVersion,
 } from "../../../api/client";
 import type {
+  ChartItem,
   TemplateElementRecord,
+  TemplateResponse,
   TemplateStudioWorkspace,
 } from "../../../api/types";
 import StatusBadge from "../../../shared/components/StatusBadge.vue";
+import StudioSegmentPreview from "../components/StudioSegmentPreview.vue";
 import type {
   TemplateStudioContext,
   TemplateStudioContextPatch,
@@ -24,22 +28,53 @@ const emit = defineEmits<{
 }>();
 
 const workspace = ref<TemplateStudioWorkspace | null>(null);
+const selectedSegmentId = ref("");
 const selectedElementId = ref("");
 const loading = ref(false);
 const message = ref("");
+const preview = ref<InstanceType<typeof StudioSegmentPreview> | null>(null);
 
-const groups = computed(() => {
-  const elements = workspace.value?.versionView.elements || [];
+const selectedSegment = computed(
+  () =>
+    workspace.value?.segments.find(
+      (segment) => segment.id === selectedSegmentId.value
+    ) || null
+);
+
+const segmentElements = computed(() =>
+  (workspace.value?.versionView.elements || []).filter(
+    (element) => element.segmentId === selectedSegmentId.value
+  )
+);
+
+const segmentPreviewData = computed<TemplateResponse | null>(() => {
+  const current = workspace.value;
+  if (!current || !selectedSegment.value) return null;
+  return hydrateTemplateResponse(
+    {
+      ...current.versionView,
+      elements: segmentElements.value,
+    },
+    []
+  );
+});
+
+const selectedCharts = computed(() => segmentPreviewData.value?.charts || []);
+
+const selectedElement = computed<TemplateElementRecord | null>(
+  () =>
+    segmentElements.value.find(
+      (element) => element.id === selectedElementId.value
+    ) || null
+);
+
+const bindingGroups = computed(() => {
+  const elements = segmentElements.value;
   return [
     {
       key: "TEXT",
       label: "文本与数字",
       items: elements.filter((item) => item.elementType === "TEXT"),
-    },
-    {
-      key: "CHART",
-      label: "Word 原生图表",
-      items: elements.filter((item) => item.elementType === "CHART"),
     },
     {
       key: "TABLE",
@@ -50,7 +85,7 @@ const groups = computed(() => {
     },
     {
       key: "OTHER",
-      label: "其他与待处理",
+      label: "其他识别目标",
       items: elements.filter(
         (item) =>
           !["TEXT", "CHART", "TABLE", "REPEAT_BLOCK"].includes(
@@ -61,11 +96,8 @@ const groups = computed(() => {
   ].filter((group) => group.items.length > 0);
 });
 
-const selectedElement = computed<TemplateElementRecord | null>(
-  () =>
-    workspace.value?.versionView.elements.find(
-      (item) => item.id === selectedElementId.value
-    ) || null
+const bindingTargetCount = computed(() =>
+  bindingGroups.value.reduce((total, group) => total + group.items.length, 0)
 );
 
 async function loadWorkspace(versionId = props.context.versionId): Promise<void> {
@@ -78,9 +110,14 @@ async function loadWorkspace(versionId = props.context.versionId): Promise<void>
       { versionId: versionId || undefined }
     );
     const version = workspace.value.versionView.version;
-    selectedElementId.value =
-      workspace.value.versionView.elements[0]?.id || "";
-    emit("update-context", { versionId: version.id });
+    const preferredSegment = workspace.value.segments.find(
+      (segment) => segment.id === props.context.segmentId
+    );
+    selectSegment(preferredSegment?.id || workspace.value.segments[0]?.id || "");
+    emit("update-context", {
+      versionId: version.id,
+      segmentId: selectedSegmentId.value,
+    });
   } catch (error) {
     message.value =
       error instanceof Error ? error.message : "加载动态内容失败。";
@@ -107,6 +144,50 @@ async function rescan(): Promise<void> {
   }
 }
 
+function selectSegment(segmentId: string): void {
+  selectedSegmentId.value = segmentId;
+  const firstElement = (workspace.value?.versionView.elements || []).find(
+    (element) => element.segmentId === segmentId
+  );
+  selectedElementId.value = firstElement?.id || "";
+  emit("update-context", { segmentId });
+}
+
+function selectPreviewTarget(locatorId: string): void {
+  const element = segmentElements.value.find(
+    (item) => elementLocatorId(item) === locatorId
+  );
+  if (element) selectedElementId.value = element.id;
+}
+
+async function focusElement(element: TemplateElementRecord): Promise<void> {
+  selectedElementId.value = element.id;
+  const locatorId = elementLocatorId(element);
+  if (!locatorId) return;
+  const targetType = ["TABLE", "REPEAT_BLOCK"].includes(element.elementType)
+    ? "TABLE"
+    : element.elementType === "CHART"
+      ? "CHART"
+      : element.elementType === "TEXT"
+        ? "TEXT"
+        : null;
+  if (!targetType) return;
+  await nextTick();
+  preview.value?.focusTarget(locatorId, targetType);
+}
+
+async function focusChart(chart: ChartItem): Promise<void> {
+  selectPreviewTarget(chart.locatorId);
+  await nextTick();
+  preview.value?.focusTarget(chart.locatorId, "CHART");
+}
+
+function elementLocatorId(element: TemplateElementRecord): string {
+  return typeof element.locator.locatorId === "string"
+    ? element.locator.locatorId
+    : "";
+}
+
 function statusColor(status: string): string {
   if (status.toUpperCase() === "VALID") return "#16805c";
   if (status.toUpperCase() === "WARNING") return "#b7791f";
@@ -117,12 +198,13 @@ onMounted(() => void loadWorkspace());
 </script>
 
 <template>
-  <section class="studio-step-card">
+  <section class="studio-step-card marking-step">
     <header class="studio-step-header">
       <div>
         <h2>标记动态内容</h2>
         <p>
-          检查系统识别的文本、数字、表格和 Word 原生图表。元素键来自文档定位信息，不使用显示标题作为稳定键。
+          选择第 2 步划分的片段，在 Word 页面中检查系统识别的可绑定内容；
+          当前片段对应的 Word 原生图表单独展示在预览下方。
         </p>
       </div>
       <button
@@ -141,6 +223,10 @@ onMounted(() => void loadWorkspace());
     <div v-else class="studio-step-body">
       <div v-if="workspace" class="studio-metrics">
         <div class="studio-metric">
+          <strong>{{ workspace.summary.segmentCount }}</strong>
+          <span>划分片段</span>
+        </div>
+        <div class="studio-metric">
           <strong>{{ workspace.summary.elementCount }}</strong>
           <span>动态元素</span>
         </div>
@@ -153,82 +239,122 @@ onMounted(() => void loadWorkspace());
           <span>Word 原生图表</span>
         </div>
         <div class="studio-metric">
-          <strong>{{ workspace.summary.tableCount }}</strong>
-          <span>自动识别表格</span>
-        </div>
-        <div class="studio-metric">
           <strong>{{ workspace.summary.unsupportedElementCount }}</strong>
           <span>不支持或需处理</span>
         </div>
       </div>
 
-      <div v-if="workspace" class="element-layout">
-        <div class="element-groups">
-          <section v-for="group in groups" :key="group.key">
-            <h3>{{ group.label }} <span>{{ group.items.length }}</span></h3>
+      <div v-if="workspace" class="marking-layout">
+        <aside class="marking-sidebar">
+          <div class="column-heading">
+            <strong>结构划分页面</strong>
+            <span>{{ workspace.segments.length }} 个</span>
+          </div>
+          <div class="segment-list">
             <button
-              v-for="element in group.items"
-              :key="element.id"
+              v-for="segment in workspace.segments"
+              :key="segment.id"
               type="button"
-              class="element-item"
-              :class="{ active: element.id === selectedElementId }"
-              @click="selectedElementId = element.id"
+              class="segment-item"
+              :class="{ active: segment.id === selectedSegmentId }"
+              @click="selectSegment(segment.id)"
             >
-              <span>
-                <strong>{{ element.displayName || element.elementKey }}</strong>
-                <small>{{ element.elementType }} · {{ element.locatorType }}</small>
-              </span>
-              <StatusBadge
-                :label="element.parseStatus"
-                :color="statusColor(element.parseStatus)"
-              />
+              <strong>{{ segment.segmentName }}</strong>
+              <span>{{ segment.segmentKey }}</span>
+              <small>{{ segment.elementCount }} 个识别元素</small>
             </button>
-          </section>
-        </div>
+          </div>
 
-        <aside class="element-detail">
-          <template v-if="selectedElement">
-            <span class="detail-kicker">元素详情</span>
-            <h3>{{ selectedElement.displayName || "未命名元素" }}</h3>
-            <dl>
-              <div>
-                <dt>稳定元素键</dt>
-                <dd>{{ selectedElement.elementKey }}</dd>
-              </div>
-              <div>
-                <dt>元素类型</dt>
-                <dd>{{ selectedElement.elementType }}</dd>
-              </div>
-              <div>
-                <dt>定位方式</dt>
-                <dd>{{ selectedElement.locatorType }}</dd>
-              </div>
-              <div>
-                <dt>所属片段</dt>
-                <dd>{{ selectedElement.segmentId || "全局" }}</dd>
-              </div>
-              <div>
-                <dt>是否必填</dt>
-                <dd>{{ selectedElement.isRequired ? "是" : "否" }}</dd>
-              </div>
-            </dl>
-            <div
-              v-if="selectedElement.parseMessage"
-              class="studio-message"
-              :class="{ error: selectedElement.parseStatus !== 'VALID' }"
+          <div class="column-heading target-heading">
+            <strong>当前片段绑定目标</strong>
+            <span>{{ bindingTargetCount }} 个</span>
+          </div>
+          <div v-if="bindingGroups.length" class="target-groups">
+            <section v-for="group in bindingGroups" :key="group.key">
+              <h3>{{ group.label }} <span>{{ group.items.length }}</span></h3>
+              <button
+                v-for="element in group.items"
+                :key="element.id"
+                type="button"
+                class="target-item"
+                :class="{ active: element.id === selectedElementId }"
+                @click="focusElement(element)"
+              >
+                <span>
+                  <strong>{{ element.displayName || element.elementKey }}</strong>
+                  <small>{{ element.elementType }} · {{ element.locatorType }}</small>
+                </span>
+                <StatusBadge
+                  :label="element.parseStatus"
+                  :color="statusColor(element.parseStatus)"
+                />
+              </button>
+            </section>
+          </div>
+          <div v-else class="studio-empty compact-empty">
+            当前片段没有文本或表格绑定目标。
+          </div>
+
+          <div class="column-heading chart-heading">
+            <strong>当前片段的 Word 原生图表</strong>
+            <span>{{ selectedCharts.length }} 个</span>
+          </div>
+          <div v-if="selectedCharts.length" class="chart-name-list">
+            <button
+              v-for="(chart, index) in selectedCharts"
+              :key="chart.locatorId"
+              type="button"
+              class="chart-name-item"
+              :class="{
+                active:
+                  selectedElement?.elementType === 'CHART' &&
+                  elementLocatorId(selectedElement) === chart.locatorId,
+              }"
+              @click="focusChart(chart)"
             >
-              {{ selectedElement.parseMessage }}
-            </div>
-          </template>
-          <div v-else class="studio-empty">当前版本没有识别到动态元素。</div>
-          <div class="marking-guide">
-            <strong>缺少标记？</strong>
-            <span>
-              可在 Word/WPS 中使用 <code v-text="'{{path}}'"></code>、
-              黄色高亮或原生图表后重新上传版本。
-            </span>
+              <span>图表 {{ index + 1 }}</span>
+              <strong>{{ chart.title || `未命名图表 ${index + 1}` }}</strong>
+            </button>
+          </div>
+          <div v-else class="studio-empty compact-empty">
+            当前片段没有识别到 Word 原生图表。
+          </div>
+
+          <div v-if="selectedElement" class="element-detail">
+            <strong>{{ selectedElement.displayName || "未命名元素" }}</strong>
+            <dl>
+              <div><dt>稳定元素键</dt><dd>{{ selectedElement.elementKey }}</dd></div>
+              <div><dt>元素类型</dt><dd>{{ selectedElement.elementType }}</dd></div>
+              <div><dt>定位方式</dt><dd>{{ selectedElement.locatorType }}</dd></div>
+              <div><dt>是否必填</dt><dd>{{ selectedElement.isRequired ? "是" : "否" }}</dd></div>
+            </dl>
+            <p v-if="selectedElement.parseMessage">{{ selectedElement.parseMessage }}</p>
           </div>
         </aside>
+
+        <div class="marking-main">
+          <section class="segment-page-panel">
+            <div class="panel-heading">
+              <div>
+                <strong>划分页面预览</strong>
+                <span>{{ selectedSegment?.segmentName || "请选择片段" }}</span>
+              </div>
+              <small>黄色为文本，绿色为表格，橙色轮廓为图表</small>
+            </div>
+            <StudioSegmentPreview
+              ref="preview"
+              :segment="selectedSegment"
+              :mock-items="segmentPreviewData?.mockItems || []"
+              :charts="selectedCharts"
+              :elements="segmentElements"
+              :selected-locator-id="
+                selectedElement ? elementLocatorId(selectedElement) : ''
+              "
+              @select-target="selectPreviewTarget"
+            />
+          </section>
+
+        </div>
       </div>
 
       <div v-if="message" class="studio-message">{{ message }}</div>
@@ -247,43 +373,61 @@ onMounted(() => void loadWorkspace());
 </template>
 
 <style scoped>
-.element-layout {
+.marking-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(280px, 0.7fr);
+  grid-template-columns: 290px minmax(0, 1fr);
   gap: 14px;
   margin-top: 16px;
 }
 
-.element-groups,
-.element-detail {
+.marking-sidebar,
+.segment-page-panel {
+  min-width: 0;
   padding: 14px;
   border: 1px solid #e0e6ef;
   border-radius: 10px;
   background: #f9fbfd;
 }
 
-.element-groups section + section {
-  margin-top: 16px;
+.marking-main {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
 }
 
-.element-groups h3 {
-  margin: 0 0 8px;
-  color: #344054;
-  font-size: 12px;
-}
-
-.element-groups h3 span {
-  color: #8a95a6;
-  font-size: 10px;
-}
-
-.element-item {
+.column-heading,
+.panel-heading,
+.panel-heading > div {
   display: flex;
   justify-content: space-between;
-  gap: 12px;
+  gap: 10px;
   align-items: center;
+}
+
+.column-heading,
+.panel-heading {
+  margin-bottom: 10px;
+  color: #344054;
+  font-size: 11px;
+}
+
+.column-heading span,
+.panel-heading span,
+.panel-heading small {
+  color: #8a95a6;
+  font-size: 9px;
+}
+
+.segment-list {
+  max-height: 260px;
+  overflow: auto;
+}
+
+.segment-item {
+  display: grid;
+  gap: 3px;
   width: 100%;
-  margin-bottom: 5px;
+  margin-bottom: 6px;
   padding: 9px 10px;
   border: 1px solid #e1e6ee;
   border-radius: 8px;
@@ -292,70 +436,185 @@ onMounted(() => void loadWorkspace());
   text-align: left;
 }
 
-.element-item span,
-.element-item strong,
-.element-item small {
-  display: block;
+.segment-item span,
+.segment-item small {
+  overflow: hidden;
+  color: #8a95a6;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.element-item small {
+.segment-item.active,
+.target-item.active,
+.chart-card.active {
+  border-color: #9fb1f0;
+  background: #eef2ff;
+}
+
+.target-heading {
+  margin-top: 18px;
+}
+
+.chart-heading {
+  margin-top: 18px;
+}
+
+.target-groups {
+  max-height: 340px;
+  overflow: auto;
+}
+
+.target-groups section + section {
+  margin-top: 13px;
+}
+
+.target-groups h3 {
+  margin: 0 0 6px;
+  color: #475467;
+  font-size: 10px;
+}
+
+.target-groups h3 span {
+  color: #8a95a6;
+}
+
+.target-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  margin-bottom: 5px;
+  padding: 8px;
+  border: 1px solid #e1e6ee;
+  border-radius: 7px;
+  background: #fff;
+  color: #344054;
+  text-align: left;
+}
+
+.target-item > span,
+.target-item strong,
+.target-item small {
+  display: block;
+  min-width: 0;
+}
+
+.target-item strong,
+.target-item small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.target-item small {
   margin-top: 2px;
   color: #8a95a6;
-  font-size: 9px;
+  font-size: 8px;
 }
 
-.element-item.active {
-  border-color: #b9c7f6;
-  background: #f0f3ff;
+.compact-empty {
+  padding: 18px 8px;
+  font-size: 10px;
 }
 
-.detail-kicker {
-  color: #3157d5;
-  font-size: 9px;
-  font-weight: 800;
-  letter-spacing: 0.1em;
-}
-
-.element-detail h3 {
-  margin: 5px 0 14px;
-}
-
-dl {
+.element-detail {
   display: grid;
-  gap: 9px;
-  margin: 0;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 10px;
+  border: 1px solid #dce4ef;
+  border-radius: 8px;
+  background: #fff;
 }
 
-dl div {
-  display: grid;
-  gap: 2px;
-}
-
-dt {
-  color: #8a95a6;
-  font-size: 9px;
-}
-
-dd {
-  margin: 0;
-  overflow-wrap: anywhere;
+.element-detail > strong {
   color: #344054;
   font-size: 11px;
 }
 
-.marking-guide {
+.element-detail dl {
   display: grid;
-  gap: 4px;
-  margin-top: 18px;
-  padding: 11px;
-  border: 1px solid #dce4ef;
-  border-radius: 8px;
-  background: #fff;
-  color: #667085;
-  font-size: 10px;
+  gap: 6px;
+  margin: 0;
 }
 
-code {
-  color: #2949b8;
+.element-detail dl div {
+  display: grid;
+  gap: 1px;
+}
+
+.element-detail dt {
+  color: #8a95a6;
+  font-size: 8px;
+}
+
+.element-detail dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: #475467;
+  font-size: 9px;
+}
+
+.element-detail p {
+  margin: 0;
+  color: #b42318;
+  font-size: 9px;
+}
+
+.segment-page-panel {
+  padding-bottom: 12px;
+}
+
+.chart-name-list {
+  display: grid;
+  gap: 8px;
+}
+
+.chart-name-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid #e1e6ee;
+  border-radius: 8px;
+  background: #f9fbfd;
+  color: #344054;
+  text-align: left;
+}
+
+.chart-name-item:hover,
+.chart-name-item.active {
+  border-color: #9fb1f0;
+  background: #eef2ff;
+}
+
+.chart-name-item span {
+  color: #b66b00;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.chart-name-item strong {
+  overflow: hidden;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 1080px) {
+  .marking-layout {
+    grid-template-columns: 250px minmax(0, 1fr);
+  }
+
+}
+
+@media (max-width: 820px) {
+  .marking-layout {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

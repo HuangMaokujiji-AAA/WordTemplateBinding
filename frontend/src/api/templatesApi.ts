@@ -1,5 +1,6 @@
 import type {
   BindingItemRecord,
+  ChartBindingMappingResponse,
   TemplateElementRecord,
   TemplateRecord,
   TemplateResponse,
@@ -7,6 +8,7 @@ import type {
   TemplateSegmentOutline,
   TemplateSegmentRecord,
   TemplateStudioWorkspace,
+  TableBindingMapping,
   TemplateVersionRecord,
   TemplateVersionView,
   PublishedTemplateList,
@@ -354,18 +356,99 @@ export function hydrateTemplateResponse(
       isBound: Boolean(binding),
       boundDataPath: binding?.sourcePath || null,
       boundDataType: null,
-      chartMapping: null,
+      chartMapping: readWrappedConfig<ChartBindingMappingResponse>(
+        binding?.formatConfig,
+        "chartMapping"
+      ),
     };
   });
+  const tables = view.elements
+    .filter((element) => element.elementType === "TABLE")
+    .map((element) => {
+      const locatorId = typeof element.locator.locatorId === "string"
+        ? element.locator.locatorId
+        : "";
+      const schema = asRecord(element.bindingSchema);
+      const binding = bindingsByElement.get(element.id);
+      const configuredColumns = readArray(schema.columns)
+        .map((value) => asRecord(value))
+        .map((column) => ({
+          columnIndex: numberValue(column.columnIndex),
+          header: stringValue(column.header),
+          sourceField: stringValue(column.sourceField),
+          fallbackValue: nullableString(column.fallbackValue),
+        }))
+        .filter((column) => column.columnIndex >= 0 && column.sourceField.length > 0);
+      const tableColumnsSource = readArray(schema.tableColumns);
+      let tableColumns = (tableColumnsSource.length
+        ? tableColumnsSource
+        : configuredColumns
+      )
+        .map((value) => asRecord(value))
+        .map((column) => ({
+          columnIndex: numberValue(column.columnIndex),
+          header: stringValue(column.header),
+          suggestedField:
+            nullableString(column.suggestedField) ||
+            nullableString(column.sourceField),
+        }))
+        .filter((column) => column.columnIndex >= 0)
+        .sort((left, right) => left.columnIndex - right.columnIndex);
+      if (tableColumns.length === 0) {
+        tableColumns = stringValue(element.locator.headerSignature)
+          .split("|")
+          .filter((header) => header.length > 0)
+          .map((header, columnIndex) => ({
+            columnIndex,
+            header,
+            suggestedField: null,
+          }));
+      }
+      const defaultMapping = {
+        headerRowCount: positiveNumber(schema.headerRowCount, 1),
+        columns: configuredColumns,
+        filterField: nullableString(schema.filterField),
+        filterValue: nullableString(schema.filterValue),
+      };
+      return {
+        templateElementId: element.id,
+        locatorId,
+        title: element.displayName || `表格 ${numberValue(element.locator.tableIndex) + 1}`,
+        locator: {
+          partKey: stringValue(element.locator.partKey),
+          tableIndex: numberValue(element.locator.tableIndex),
+          firstParagraphIndex: numberValue(element.locator.firstParagraphIndex),
+          headerSignature: stringValue(element.locator.headerSignature),
+        },
+        columns: tableColumns,
+        headerRowCount: positiveNumber(schema.headerRowCount, 1),
+        templateRowCount: positiveNumber(schema.templateRowCount, 2),
+        suggestedSourcePath: nullableString(schema.suggestedSourcePath),
+        contextLabel: nullableString(schema.contextLabel),
+        defaultMapping,
+        tableMapping: readWrappedConfig<TableBindingMapping>(
+          binding?.formatConfig,
+          "tableMapping"
+        ),
+        isBindable: element.parseStatus.toUpperCase() === "VALID",
+        isBound: Boolean(binding),
+        boundDataPath: binding?.sourcePath || null,
+        parseMessage: element.parseMessage,
+        segmentLocalOrder: element.segmentLocalOrder,
+      };
+    })
+    .filter((table) => table.locatorId.length > 0);
   return {
     templateId: view.template.id,
     fileName: view.file.originalName,
     contentHash: scan.contentHash,
     mockItemCount: mockItems.length,
     chartCount: charts.length,
+    tableCount: tables.length,
     bindingCount: bindingItems.length,
     mockItems,
     charts,
+    tables,
     preview: scan.preview,
     importSummary: view.parseResult.importSummary || {
       textBindingsRestored: 0,
@@ -377,4 +460,39 @@ export function hydrateTemplateResponse(
     createdAt: view.template.createdAt,
     updatedAt: view.template.updatedAt,
   };
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function readArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function nullableString(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function numberValue(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : -1;
+}
+
+function positiveNumber(value: unknown, fallback: number): number {
+  const parsed = numberValue(value);
+  return parsed > 0 ? parsed : fallback;
+}
+
+function readWrappedConfig<T>(value: unknown, key: string): T | null {
+  const root = asRecord(value);
+  const candidate = key in root ? root[key] : value;
+  return candidate && typeof candidate === "object" && !Array.isArray(candidate)
+    ? candidate as T
+    : null;
 }

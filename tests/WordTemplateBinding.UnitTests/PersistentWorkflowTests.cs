@@ -191,6 +191,116 @@ public sealed class PersistentWorkflowTests
             StringComparison.Ordinal);
     }
 
+    /// <summary>验证步骤 6 保存的数组与列映射可以生成行数可变的 Word 表格。</summary>
+    [Fact]
+    public async Task TableBindingSetWorkflow_MapsArrayAndExportsRows()
+    {
+        TestContext context = new();
+        byte[] bytes = OpenXmlTestDocumentFactory.CreateBusinessTableDocument(
+            "专业信息",
+            new[] { "专业名称", "学生人数" },
+            new[] { "模板专业", "0" });
+        await using MemoryStream input = new(bytes, writable: false);
+        TemplateVersionView view = await context.Templates.CreateAsync(
+            new TemplateCreateRequest
+            {
+                TemplateCode = "TABLE_REPORT",
+                TemplateName = "表格绑定模板",
+            },
+            "table-report.docx",
+            bytes.Length,
+            input,
+            actorUserId: 1,
+            CancellationToken.None);
+        TemplateElementRecord tableElement = Assert.Single(
+            view.Elements.Where(item => item.ElementType == "TABLE"));
+        Assert.Equal("VALID", tableElement.ParseStatus);
+
+        ProjectRecord project = await context.Projects.CreateProjectAsync(
+            "P_TABLE", "表格测试项目", null, CancellationToken.None);
+        ChapterRecord chapter = await context.Projects.CreateChapterAsync(
+            project.Id, "C_TABLE", "表格章节", null, 1, CancellationToken.None);
+        DataSourceRecord source = await context.Sources.CreateAsync(
+            new DataSourceRecord
+            {
+                Id = 0,
+                ProjectId = project.Id,
+                ConnectionId = 1,
+                SourceCode = "MAJOR_ROWS",
+                SourceName = "专业数据",
+                SourceType = "DATABASE",
+                SourceStatus = "ACTIVE",
+                SchemaName = "reporting",
+                ObjectType = "TABLE",
+                ObjectName = "major_rows",
+                CreatedAt = DateTimeOffset.UtcNow,
+            },
+            actorUserId: 1,
+            CancellationToken.None);
+        DataSnapshotRecord snapshot = await context.Snapshots.StartAsync(
+            source.Id, actorUserId: 1, CancellationToken.None);
+        await context.Fields.ReplaceAsync(
+            snapshot.Id,
+            new[]
+            {
+                new DataFieldRecord
+                {
+                    Id = 0,
+                    SnapshotId = snapshot.Id,
+                    FieldPath = "items",
+                    FieldName = "items",
+                    Comment = "专业列表",
+                    DataType = DataValueType.Array,
+                    IsArray = true,
+                    IsNullable = false,
+                    IsBindable = true,
+                    SampleValueJson = "[]",
+                    DisplayOrder = 1,
+                },
+            },
+            CancellationToken.None);
+        await context.Snapshots.CompleteAsync(
+            snapshot.Id,
+            """{"items":[{"name":"人工智能","count":120},{"name":"金融学","count":98},{"name":"会计学","count":135}]}""",
+            "{}",
+            new string('b', 64),
+            3,
+            CancellationToken.None);
+
+        BindingSetRecord set = await context.Bindings.GetOrCreateDraftAsync(
+            chapter.Id, view.Version.Id, CancellationToken.None);
+        BindingItemRecord binding = await context.Bindings.UpsertAsync(
+            set.Id,
+            tableElement.Id,
+            new BindingItemUpsert
+            {
+                DataSourceId = source.Id,
+                SourcePath = "items",
+                FormatConfigJson = """
+                    {"tableMapping":{"headerRowCount":1,"columns":[
+                      {"columnIndex":0,"header":"专业名称","sourceField":"name","fallbackValue":null},
+                      {"columnIndex":1,"header":"学生人数","sourceField":"count","fallbackValue":"0"}
+                    ],"filterField":null,"filterValue":null}}
+                    """,
+            },
+            CancellationToken.None);
+        Assert.NotEqual(0UL, binding.Id);
+
+        BindingValidationResult validation = await context.Bindings.ValidateAsync(
+            set.Id, CancellationToken.None);
+        Assert.Equal("VALID", validation.Status);
+
+        RenderedReport report = await context.Documents.GenerateReportAsync(
+            set.Id, CancellationToken.None);
+        IReadOnlyList<IReadOnlyList<string>> rows =
+            OpenXmlTestDocumentFactory.ReadFirstTableRows(report.GetBytesCopy());
+        Assert.Equal(4, rows.Count);
+        Assert.Equal(new[] { "专业名称", "学生人数" }, rows[0]);
+        Assert.Equal(new[] { "人工智能", "120" }, rows[1]);
+        Assert.Equal(new[] { "金融学", "98" }, rows[2]);
+        Assert.Equal(new[] { "会计学", "135" }, rows[3]);
+    }
+
     private sealed class TestContext
     {
         private readonly InMemoryPersistenceState _state = new();

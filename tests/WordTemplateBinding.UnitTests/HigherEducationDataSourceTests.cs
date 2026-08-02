@@ -106,10 +106,123 @@ public sealed class HigherEducationDataSourceTests
         Assert.Equal("专业指标雷达图数据（按专业）", metrics.Name);
         DataFieldNode major = Assert.Single(metrics.Children);
         Assert.Equal("大气科学（070601）", major.Name);
-        Assert.Contains(major.Children, node =>
-            node.Path == "majorMetrics.070601.level1RadarData" &&
-            node.Type == Core.Enums.DataValueType.Array &&
-            node.IsBindable);
+        DataFieldNode radarData = Assert.Single(major.Children.Where(node =>
+            node.Path == "majorMetrics.070601.level1RadarData"));
+        Assert.Equal(Core.Enums.DataValueType.Array, radarData.Type);
+        Assert.True(radarData.IsBindable);
+        Assert.Equal("一级指标雷达图", radarData.Comment);
+        Assert.False(radarData.IsNullable);
+        Assert.Contains("category", radarData.SampleValueJson);
+        Assert.Equal(
+            new[] { "category", "平均值", "最大值", "最小值", "大气科学", "supplement" },
+            radarData.Children.Select(node => node.Path.Split('.').Last()));
+        Assert.All(radarData.Children, node =>
+        {
+            Assert.True(node.IsLeaf);
+            Assert.True(node.IsBindable);
+            Assert.False(string.IsNullOrWhiteSpace(node.SampleValueJson));
+        });
+    }
+
+    /// <summary>关系数据库的 rows 集合会直接携带单行数据库列，搜索时也不丢失。</summary>
+    [Fact]
+    public async Task PersistentSchema_RowsArrayContainsDatabaseColumns()
+    {
+        TestContext context = await TestContext.CreateAsync();
+        DataSourceRecord source = await context.Sources.CreateAsync(
+            new DataSourceRecord
+            {
+                Id = 0,
+                ProjectId = context.Project.Id,
+                ConnectionId = 1,
+                SourceCode = "MAJOR_ROWS",
+                SourceName = "专业明细",
+                SourceType = "DATABASE",
+                SourceStatus = "ACTIVE",
+                SchemaName = "reporting",
+                ObjectType = "TABLE",
+                ObjectName = "major_rows",
+                CreatedAt = DateTimeOffset.UtcNow,
+            },
+            actorUserId: 1,
+            CancellationToken.None);
+        DataSnapshotRecord snapshot = await context.Snapshots.StartAsync(
+            source.Id,
+            actorUserId: 1,
+            CancellationToken.None);
+        await context.Fields.ReplaceAsync(
+            snapshot.Id,
+            new[]
+            {
+                new DataFieldRecord
+                {
+                    Id = 0,
+                    SnapshotId = snapshot.Id,
+                    FieldPath = "rows",
+                    FieldName = "样例行集合",
+                    Comment = "当前数据源的行集合",
+                    DataType = Core.Enums.DataValueType.Array,
+                    IsArray = true,
+                    IsNullable = false,
+                    IsBindable = true,
+                    SampleValueJson = "[]",
+                    DisplayOrder = 0,
+                },
+                new DataFieldRecord
+                {
+                    Id = 0,
+                    SnapshotId = snapshot.Id,
+                    FieldPath = "row.major_name",
+                    FieldName = "专业名称",
+                    Comment = "数据库专业名称列",
+                    DataType = Core.Enums.DataValueType.String,
+                    IsArray = false,
+                    IsNullable = false,
+                    IsBindable = true,
+                    SampleValueJson = "\"人工智能\"",
+                    DisplayOrder = 1,
+                },
+                new DataFieldRecord
+                {
+                    Id = 0,
+                    SnapshotId = snapshot.Id,
+                    FieldPath = "row.student_count",
+                    FieldName = "学生人数",
+                    Comment = "数据库学生人数列",
+                    DataType = Core.Enums.DataValueType.Integer,
+                    IsArray = false,
+                    IsNullable = true,
+                    IsBindable = true,
+                    SampleValueJson = "120",
+                    DisplayOrder = 2,
+                },
+            },
+            CancellationToken.None);
+        await context.Snapshots.CompleteAsync(
+            snapshot.Id,
+            "{}",
+            "{}",
+            new string('c', 64),
+            1,
+            CancellationToken.None);
+        PersistentDataSchemaProvider provider = new(
+            context.Snapshots,
+            context.Fields);
+
+        IReadOnlyList<DataFieldNode> roots = await provider.GetSchemaAsync(
+            new DataSchemaContext(source.Id),
+            CancellationToken.None);
+        DataFieldNode rows = Assert.Single(roots.Where(node => node.Path == "rows"));
+        Assert.Equal(
+            new[] { "row.major_name", "row.student_count" },
+            rows.Children.Select(node => node.Path));
+
+        DataSchemaSearchResult search = await provider.SearchAsync(
+            new DataSchemaContext(source.Id),
+            "rows",
+            20,
+            CancellationToken.None);
+        Assert.Equal(2, Assert.Single(search.Nodes).Children.Count);
     }
 
     private sealed class TestContext
@@ -220,6 +333,12 @@ public sealed class HigherEducationDataSourceTests
                                     ["最大值"] = 95m,
                                     ["最小值"] = 60m,
                                     ["大气科学"] = 88m,
+                                },
+                                new Dictionary<string, object?>
+                                {
+                                    ["category"] = "招生",
+                                    ["平均值"] = 75m,
+                                    ["supplement"] = "仅第二条记录包含的字段",
                                 },
                             },
                         },

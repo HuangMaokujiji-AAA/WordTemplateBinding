@@ -51,6 +51,18 @@ internal static class OpenXmlTableWriter
         {
             TableRow output = (TableRow)prototype.CloneNode(true);
             List<TableCell> cells = output.Elements<TableCell>().ToList();
+            HashSet<int> mappedColumns = mapping.Columns
+                .Select(column => column.ColumnIndex)
+                .ToHashSet();
+            for (int columnIndex = 0; columnIndex < cells.Count; columnIndex++)
+            {
+                if (!mappedColumns.Contains(columnIndex))
+                {
+                    // Never repeat sample values from the prototype in columns
+                    // the user intentionally left unmapped.
+                    SetCellText(cells[columnIndex], string.Empty);
+                }
+            }
             foreach (TableColumnBinding column in mapping.Columns)
             {
                 if (column.ColumnIndex < 0 || column.ColumnIndex >= cells.Count)

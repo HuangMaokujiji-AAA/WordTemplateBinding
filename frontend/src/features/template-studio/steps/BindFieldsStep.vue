@@ -43,6 +43,8 @@ import type {
   DataSchemaResponse,
   MockItem,
   ProjectRecord,
+  TableBindingMapping,
+  TableItem,
   TemplateRecord,
   TemplateResponse,
   TemplateSegmentRecord,
@@ -54,6 +56,7 @@ import LoadingOverlay from "../../../components/LoadingOverlay.vue";
 import ParseStatusPanel from "../../../components/ParseStatusPanel.vue";
 import SchemaTreeNode from "../../../components/SchemaTreeNode.vue";
 import ChartStructurePanel from "../../../components/ChartStructurePanel.vue";
+import TableBindingPanel from "../../../components/TableBindingPanel.vue";
 import {
   processDocx,
   type DocxProcessProgress,
@@ -71,6 +74,11 @@ import {
   focusChartTarget,
   refreshChartBindingTargetStates,
 } from "../../binding/renderedChartBindings";
+import {
+  decorateRenderedTables,
+  focusTableTarget,
+  refreshTableBindingTargetStates,
+} from "../../binding/renderedTableBindings";
 import { formatImportSummary } from "../../binding/importSummaryStatus";
 import { buildChartWorkspace, type ChartWorkspaceItem } from "../../binding/chartWorkspace";
 import {
@@ -118,8 +126,10 @@ const {
   selectedLocatorId,
   selectedItem,
   selectedChart,
+  selectedTable,
   boundItems,
   boundCharts,
+  boundTables,
   syncSelection,
   resetBindingEditor,
 } = useBindingEditor(template);
@@ -133,8 +143,11 @@ const loadingMessage = ref("");
 const documentVisible = ref(false);
 const renderedLocatorCount = ref(0);
 const renderedChartCount = ref(0);
+const renderedTableCount = ref(0);
 const unresolvedLocatorIds = ref<string[]>([]);
 const unresolvedChartIds = ref<string[]>([]);
+const unresolvedTableIds = ref<string[]>([]);
+const pendingTableField = ref<DataFieldNode | null>(null);
 const docxViewerRef = ref<InstanceType<typeof DocxViewer> | null>(null);
 const previewCanvas = ref<HTMLElement | null>(null);
 const previewSurfaceWidth = ref(0);
@@ -152,6 +165,28 @@ const selectedChartWorkspaceItem = computed<ChartWorkspaceItem | null>(
       (item) => item.locatorId === selectedLocatorId.value
     ) || null
 );
+const selectedTableDataPath = computed(
+  () => pendingTableField.value?.path || selectedTable.value?.boundDataPath || ""
+);
+const selectedTableFieldOptions = computed(() => {
+  const dataPath = selectedTableDataPath.value;
+  if (!dataPath) return [];
+  const field = pendingTableField.value?.path === dataPath
+    ? pendingTableField.value
+    : findSchemaNode(schema.value?.nodes || [], dataPath);
+  if (!field) return [];
+  const prefix = `${field.path}[]`;
+  return flattenSchemaNodes(field.children)
+    .filter((node) => node.isLeaf)
+    .map((node) => ({
+      label: `${node.name} · ${node.type}`,
+      value: node.path.startsWith(`${prefix}.`)
+        ? node.path.slice(prefix.length + 1)
+        : node.path.startsWith(`${field.path}.`)
+          ? node.path.slice(field.path.length + 1)
+        : node.path.split(".").at(-1) || node.name,
+    }));
+});
 const footerMockCount = computed(
   () =>
     template.value?.mockItems.filter(
@@ -170,6 +205,19 @@ const schemaSummary = computed(() => {
 let renderTaskId = 0;
 let searchTimer: ReturnType<typeof setTimeout> | undefined;
 let bootstrappingContext = true;
+
+function flattenSchemaNodes(nodes: DataFieldNode[]): DataFieldNode[] {
+  return nodes.flatMap((node) => [node, ...flattenSchemaNodes(node.children)]);
+}
+
+function findSchemaNode(nodes: DataFieldNode[], path: string): DataFieldNode | null {
+  for (const node of nodes) {
+    if (node.path === path) return node;
+    const nested = findSchemaNode(node.children, path);
+    if (nested) return nested;
+  }
+  return null;
+}
 
 function setZoom(value: number): void {
   zoomPercent.value = Math.min(150, Math.max(50, value));
@@ -410,6 +458,29 @@ async function handleSaveMapping(mappingPayload: {
   });
 }
 
+async function handleSaveTableMapping(payload: {
+  table: TableItem;
+  dataPath: string;
+  mapping: TableBindingMapping;
+}): Promise<void> {
+  if (!bindingSetId.value || !selectedDataSourceId.value) return;
+  await runAction("正在保存表格绑定与列映射…", async () => {
+    await upsertPersistentBinding(
+      bindingSetId.value,
+      payload.table.templateElementId,
+      selectedDataSourceId.value,
+      payload.dataPath,
+      JSON.stringify({ tableMapping: payload.mapping })
+    );
+    pendingTableField.value = null;
+    await refreshTemplateBindings();
+    selectedLocatorId.value = payload.table.locatorId;
+    activeTab.value = "table-structure";
+    refreshRenderedBindings();
+    setStatus(`表格已绑定：${payload.dataPath}，列映射已保存。`);
+  });
+}
+
 async function handleExportReusable(): Promise<void> {
   if (!bindingSetId.value) return;
 
@@ -439,6 +510,23 @@ async function bindField(
   const targetItem = template.value.mockItems.find(
     (item) => item.locatorId === locatorId
   );
+  const targetTable = template.value.tables.find(
+    (table) => table.locatorId === locatorId
+  );
+  if (targetTable) {
+    if (!targetTable.isBindable) {
+      setStatus(targetTable.parseMessage || "该表格当前不可绑定。", true);
+      return;
+    }
+    if (field.type !== "Array") {
+      setStatus("表格只能绑定集合字段。", true);
+      return;
+    }
+    pendingTableField.value = field;
+    activeTab.value = "table-structure";
+    setStatus(`已选择集合字段 ${field.path}，请确认表格列映射后保存。`);
+    return;
+  }
   if (targetChart && !targetChart.isBindable) {
     setStatus("该图表没有可写的数据系列缓存。", true);
     return;
@@ -448,7 +536,7 @@ async function bindField(
     return;
   }
   if (!targetChart && field.type === "Array") {
-    setStatus("集合字段只能绑定图表，不能绑定文本模拟值。", true);
+    setStatus("集合字段只能绑定图表或表格，不能绑定文本模拟值。", true);
     return;
   }
 
@@ -489,6 +577,7 @@ async function removeBinding(locatorId: string): Promise<void> {
     const target = [
       ...template.value!.mockItems,
       ...template.value!.charts,
+      ...template.value!.tables,
     ].find((item) => item.locatorId === locatorId);
     if (!target?.templateElementId) throw new Error("目标缺少持久化模板元素 ID。");
     await deletePersistentBinding(bindingSetId.value, target.templateElementId);
@@ -501,7 +590,7 @@ async function removeBinding(locatorId: string): Promise<void> {
 
 function handleFieldSelected(field: DataFieldNode): void {
   if (!selectedLocatorId.value) {
-    setStatus("请先点击文档中的模拟值或图表，或从左侧导航中选择一项。");
+    setStatus("请先点击文档中的模拟值、图表或表格，或从左侧导航中选择一项。");
     return;
   }
   void bindField(selectedLocatorId.value, field);
@@ -519,6 +608,15 @@ function selectChart(chart: ChartItem): void {
   void loadBindingPreview(chart.templateElementId);
 }
 
+function selectTable(table: TableItem): void {
+  if (selectedLocatorId.value !== table.locatorId) {
+    pendingTableField.value = null;
+  }
+  selectedLocatorId.value = table.locatorId;
+  activeTab.value = table.isBound ? "table-structure" : "properties";
+  void loadBindingPreview(table.templateElementId);
+}
+
 function focusMockItem(item: MockItem): void {
   selectMockItem(item);
   const container = getViewerContainers()?.documentContainer;
@@ -532,6 +630,14 @@ function focusChart(chart: ChartItem): void {
   const container = getViewerContainers()?.documentContainer;
   if (!container || !focusChartTarget(container, chart.locatorId)) {
     setStatus("该图表未能映射到网页预览，可继续在右侧选择集合字段完成绑定。");
+  }
+}
+
+function focusTable(table: TableItem): void {
+  selectTable(table);
+  const container = getViewerContainers()?.documentContainer;
+  if (!container || !focusTableTarget(container, table.locatorId)) {
+    setStatus("该表格未能映射到网页预览，可继续选择集合字段并配置列映射。", true);
   }
 }
 
@@ -557,8 +663,11 @@ function resetTemplateState(): void {
   parsedCharts.value = [];
   renderedLocatorCount.value = 0;
   renderedChartCount.value = 0;
+  renderedTableCount.value = 0;
   unresolvedLocatorIds.value = [];
   unresolvedChartIds.value = [];
+  unresolvedTableIds.value = [];
+  pendingTableField.value = null;
   resetSegmentEditor();
 }
 
@@ -588,6 +697,7 @@ function refreshRenderedBindings(): void {
   if (container && template.value) {
     refreshBindingTargetStates(container, template.value.mockItems);
     refreshChartBindingTargetStates(container, template.value.charts);
+    refreshTableBindingTargetStates(container, template.value.tables);
   }
 }
 
@@ -891,6 +1001,13 @@ function decorateCurrentTemplate(container: HTMLElement): void {
   });
   renderedChartCount.value = charts.renderedCount;
   unresolvedChartIds.value = charts.unresolvedLocatorIds;
+  const tables = decorateRenderedTables(container, template.value.tables, {
+    onSelect: selectTable,
+    onBind: (locatorId, field) => void bindField(locatorId, field),
+    onError: (message) => setStatus(message, true),
+  });
+  renderedTableCount.value = tables.renderedCount;
+  unresolvedTableIds.value = tables.unresolvedLocatorIds;
 }
 
 async function loadBindingPreview(
@@ -898,7 +1015,11 @@ async function loadBindingPreview(
 ): Promise<void> {
   bindingPreview.value = "";
   if (!templateElementId || !bindingSetId.value) return;
-  const target = [...(template.value?.mockItems || []), ...(template.value?.charts || [])]
+  const target = [
+    ...(template.value?.mockItems || []),
+    ...(template.value?.charts || []),
+    ...(template.value?.tables || []),
+  ]
     .find((item) => item.templateElementId === templateElementId);
   if (!target?.isBound) return;
   try {
@@ -1165,9 +1286,11 @@ function partLabel(item: MockItem): string {
           <dl class="metadata">
             <div><dt>模拟值</dt><dd>{{ template?.mockItemCount || 0 }}</dd></div>
             <div><dt>原生图表</dt><dd>{{ template?.chartCount || 0 }}</dd></div>
+            <div><dt>可绑定表格</dt><dd>{{ template?.tableCount || 0 }}</dd></div>
             <div><dt>已绑定</dt><dd>{{ template?.bindingCount || 0 }}</dd></div>
             <div><dt>网页定位</dt><dd>{{ renderedLocatorCount }}</dd></div>
             <div><dt>图表定位</dt><dd>{{ renderedChartCount }}</dd></div>
+            <div><dt>表格定位</dt><dd>{{ renderedTableCount }}</dd></div>
             <div><dt>页脚模拟值</dt><dd>{{ footerMockCount }}</dd></div>
             <div>
               <dt>内容哈希</dt>
@@ -1176,6 +1299,29 @@ function partLabel(item: MockItem): string {
               </dd>
             </div>
           </dl>
+        </section>
+
+        <section class="panel-section mock-list-section">
+          <h2>表格导航</h2>
+          <p v-if="!template" class="empty-state">加载模板后显示可绑定表格</p>
+          <p v-else-if="template.tables.length === 0" class="empty-state">当前片段未识别到业务表格</p>
+          <div v-else class="mock-list table-target-list">
+            <button
+              v-for="table in template.tables"
+              :key="table.locatorId"
+              type="button"
+              class="mock-list-item table-list-item"
+              :class="{
+                'is-bound': table.isBound,
+                'is-selected': table.locatorId === selectedLocatorId,
+                'is-unresolved': unresolvedTableIds.includes(table.locatorId),
+              }"
+              @click="focusTable(table)"
+            >
+              <strong>{{ table.title }}</strong>
+              <span>{{ table.boundDataPath || `${table.columns.length} 列 · ${table.isBindable ? '可绑定' : '不可绑定'}` }}</span>
+            </button>
+          </div>
         </section>
 
         <section class="panel-section mock-list-section">
@@ -1284,6 +1430,7 @@ function partLabel(item: MockItem): string {
             <i class="legend-body"></i>正文模拟值
             <i class="legend-footer"></i>页脚模拟值/区域
             <i class="legend-chart"></i>可绑定图表
+            <i class="legend-table"></i>可绑定表格
           </span>
         </div>
         <div
@@ -1318,7 +1465,8 @@ function partLabel(item: MockItem): string {
           </label>
           <p class="small-note">{{ schemaSummary }}</p>
           <p class="binding-hint">
-            标量字段绑定黄色/紫色文本；集合字段绑定橙色图表区域。将新字段拖到已绑定目标可直接改绑，无需先取消。
+            标量字段绑定黄色/紫色文本；集合字段绑定橙色图表或青绿色表格。表格选择集合后需确认列映射。
+            悬停任意字段可查看完整路径、示例值和内部数据结构。
           </p>
           <div class="schema-tree">
             <SchemaTreeNode
@@ -1331,7 +1479,7 @@ function partLabel(item: MockItem): string {
         </section>
 
         <section v-else-if="activeTab === 'bindings'" class="tab-panel">
-          <p v-if="boundItems.length === 0 && boundCharts.length === 0" class="empty-state">尚无绑定关系</p>
+          <p v-if="boundItems.length === 0 && boundCharts.length === 0 && boundTables.length === 0" class="empty-state">尚无绑定关系</p>
           <div v-else class="binding-list">
             <article v-for="item in boundItems" :key="item.locatorId" class="binding-card">
               <button type="button" class="binding-main" @click="focusMockItem(item)">
@@ -1354,12 +1502,21 @@ function partLabel(item: MockItem): string {
                 取消绑定
               </button>
             </article>
+            <article v-for="table in boundTables" :key="table.locatorId" class="binding-card table-binding-card">
+              <button type="button" class="binding-main" @click="focusTable(table)">
+                <strong>表格：{{ table.title }} <em>表格</em></strong>
+                <span>{{ table.boundDataPath }}</span>
+              </button>
+              <button type="button" class="binding-remove" @click="removeBinding(table.locatorId)">
+                取消绑定
+              </button>
+            </article>
           </div>
         </section>
 
         <section v-else-if="activeTab === 'properties'" class="tab-panel properties-panel">
-          <p v-if="!selectedItem && !selectedChart" class="empty-state">
-            点击文档高亮、图表或左侧导航查看属性
+          <p v-if="!selectedItem && !selectedChart && !selectedTable" class="empty-state">
+            点击文档高亮、图表、表格或左侧导航查看属性
           </p>
           <dl v-else-if="selectedItem">
             <div><dt>原始值</dt><dd>{{ selectedItem.mockValue }}</dd></div>
@@ -1386,6 +1543,16 @@ function partLabel(item: MockItem): string {
             <div><dt>TemplateElementId</dt><dd>{{ selectedChart.templateElementId || "—" }}</dd></div>
             <div><dt>LocatorId</dt><dd>{{ selectedChart.locatorId }}</dd></div>
           </dl>
+          <dl v-else-if="selectedTable">
+            <div><dt>目标类型</dt><dd>Word 业务表格</dd></div>
+            <div><dt>表格名称</dt><dd>{{ selectedTable.title }}</dd></div>
+            <div><dt>列数</dt><dd>{{ selectedTable.columns.length }}</dd></div>
+            <div><dt>模板行数</dt><dd>{{ selectedTable.templateRowCount }}</dd></div>
+            <div><dt>已绑定集合</dt><dd>{{ selectedTableDataPath || "未绑定" }}</dd></div>
+            <div><dt>绑定预览</dt><dd>{{ bindingPreview || "—" }}</dd></div>
+            <div><dt>TemplateElementId</dt><dd>{{ selectedTable.templateElementId }}</dd></div>
+            <div><dt>LocatorId</dt><dd>{{ selectedTable.locatorId }}</dd></div>
+          </dl>
         </section>
 
         <section v-else-if="activeTab === 'chart-structure'" class="tab-panel">
@@ -1393,6 +1560,14 @@ function partLabel(item: MockItem): string {
             :item="selectedChartWorkspaceItem"
             @test-report="handleTestReport"
             @save-mapping="handleSaveMapping"
+          />
+        </section>
+        <section v-else-if="activeTab === 'table-structure'" class="tab-panel">
+          <TableBindingPanel
+            :table="selectedTable"
+            :data-path="selectedTableDataPath"
+            :field-options="selectedTableFieldOptions"
+            @save="handleSaveTableMapping"
           />
         </section>
       </aside>

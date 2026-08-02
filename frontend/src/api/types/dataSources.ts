@@ -7,6 +7,9 @@ export interface DataFieldNode {
   isCollection: boolean;
   isLeaf: boolean;
   isBindable: boolean;
+  comment?: string | null;
+  isNullable?: boolean | null;
+  sampleValueJson?: string | null;
   children: DataFieldNode[];
 }
 
