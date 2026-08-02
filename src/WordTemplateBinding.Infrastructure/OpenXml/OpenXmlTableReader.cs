@@ -119,8 +119,9 @@ internal static partial class OpenXmlTableReader
             HeaderRowCount = 1,
             TemplateRowCount = rows.Count,
             Columns = columns,
-            IsBindable = suggestion.SourcePath is not null &&
-                         columns.Any(column => column.SuggestedField is not null),
+            // Any structurally valid two-row table can be bound manually.
+            // Known header patterns only provide automatic source suggestions.
+            IsBindable = columns.Count > 0,
             IsBound = false,
             BoundDataPath = null,
         };

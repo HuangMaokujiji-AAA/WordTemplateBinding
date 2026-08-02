@@ -201,6 +201,9 @@ internal sealed record DataFieldNodeResponse(
     bool IsCollection,
     bool IsLeaf,
     bool IsBindable,
+    string? Comment,
+    bool? IsNullable,
+    string? SampleValueJson,
     IReadOnlyList<DataFieldNodeResponse> Children);
 
 /// <summary>
@@ -355,6 +358,9 @@ internal static class ApiContractMapper
                 node.IsCollection,
                 node.IsLeaf,
                 node.IsBindable,
+                node.Comment,
+                node.IsNullable,
+                node.SampleValueJson,
                 ToResponse(node.Children)))
             .ToList()
             .AsReadOnly();

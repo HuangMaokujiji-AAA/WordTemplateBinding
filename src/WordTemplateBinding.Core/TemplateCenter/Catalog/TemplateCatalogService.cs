@@ -483,6 +483,7 @@ public sealed class TemplateCatalogService
                         table.ContextLabel,
                         table.HeaderRowCount,
                         table.TemplateRowCount,
+                        tableColumns = table.Columns,
                         columns,
                         filterField = string.Equals(
                             table.SuggestedSourcePath,
@@ -503,9 +504,7 @@ public sealed class TemplateCatalogService
                 SortNo = sort++,
                 SegmentLocalOrder = NextLocalOrder(assigned?.Id, localOrders),
                 ParseStatus = table.IsBindable ? "VALID" : "UNSUPPORTED",
-                ParseMessage = table.IsBindable
-                    ? null
-                    : "未找到与该表头匹配的数据源字段规则。",
+                ParseMessage = table.IsBindable ? null : "表格缺少可复制的数据行或有效列。",
             });
         }
 

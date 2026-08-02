@@ -38,6 +38,21 @@ public sealed record DataFieldNode
     public required bool IsBindable { get; init; }
 
     /// <summary>
+    /// 获取字段备注；分组节点可能没有备注。
+    /// </summary>
+    public string? Comment { get; init; }
+
+    /// <summary>
+    /// 获取字段是否允许为空；分组节点没有此信息。
+    /// </summary>
+    public bool? IsNullable { get; init; }
+
+    /// <summary>
+    /// 获取数据快照中的示例值 JSON。
+    /// </summary>
+    public string? SampleValueJson { get; init; }
+
+    /// <summary>
     /// 获取子节点。
     /// </summary>
     public IReadOnlyList<DataFieldNode> Children { get; init; } = Array.Empty<DataFieldNode>();

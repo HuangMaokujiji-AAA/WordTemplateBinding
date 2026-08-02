@@ -11,6 +11,7 @@ import type { TemplateRecord } from "../api/types";
 import ErrorBanner from "../shared/components/ErrorBanner.vue";
 import PaginationControls from "../shared/components/PaginationControls.vue";
 import StatusBadge from "../shared/components/StatusBadge.vue";
+import { formatDateTime } from "../shared/utils/dateTime";
 
 const router = useRouter();
 
@@ -297,7 +298,7 @@ onMounted(fetchTemplates);
             </td>
             <td class="cell-version">{{ item.currentVersionNo }}</td>
             <td class="cell-elements">{{ (item as any).elementCount ?? '-' }}</td>
-            <td class="cell-date">{{ item.updatedAt }}</td>
+            <td class="cell-date">{{ formatDateTime(item.updatedAt) }}</td>
             <td>
               <div class="actions-cell">
                 <button

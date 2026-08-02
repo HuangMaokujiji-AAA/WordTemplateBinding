@@ -46,6 +46,30 @@
   box-shadow: 0 0 0 7px rgb(22 163 74 / 16%);
 }
 
+.template-table-target {
+  cursor: pointer;
+  outline: 3px solid rgb(20 184 166 / 72%);
+  outline-offset: 3px;
+  transition: outline-color 160ms ease, box-shadow 160ms ease;
+}
+
+.template-table-target:hover,
+.template-table-target:focus-visible,
+.template-table-target.is-focused,
+.template-table-target.is-drag-over {
+  outline-color: #0f766e;
+  box-shadow: 0 0 0 7px rgb(20 184 166 / 16%);
+}
+
+.template-table-target.is-bound {
+  outline-color: #16a34a;
+}
+
+.template-table-target.is-disabled {
+  outline-color: #94a3b8;
+  cursor: default;
+}
+
 /* Keep the external Word caption and the ECharts replacement together. */
 .docx-chart-figure {
   display: block;

@@ -616,8 +616,15 @@ public sealed class DataSourceWorkspaceService
         JsonElement root)
     {
         List<DataFieldRecord> fields = new();
+        Dictionary<string, int> fieldIndexes = new(StringComparer.Ordinal);
         int order = 0;
-        WalkStructuredFields(snapshotId, root, string.Empty, fields, ref order);
+        WalkStructuredFields(
+            snapshotId,
+            root,
+            string.Empty,
+            fields,
+            fieldIndexes,
+            ref order);
         return fields;
     }
 
@@ -625,7 +632,8 @@ public sealed class DataSourceWorkspaceService
         ulong snapshotId,
         JsonElement element,
         string path,
-        ICollection<DataFieldRecord> fields,
+        List<DataFieldRecord> fields,
+        IDictionary<string, int> fieldIndexes,
         ref int order)
     {
         if (element.ValueKind == JsonValueKind.Object)
@@ -640,9 +648,66 @@ public sealed class DataSourceWorkspaceService
                     property.Value,
                     childPath,
                     fields,
+                    fieldIndexes,
                     ref order);
             }
 
+            return;
+        }
+
+        AddOrMergeStructuredField(
+            snapshotId,
+            element,
+            path,
+            fields,
+            fieldIndexes,
+            ref order);
+
+        if (element.ValueKind != JsonValueKind.Array)
+        {
+            return;
+        }
+
+        // 数组本身可绑定；同时扫描前 50 条对象记录并合并其字段，
+        // 让表格列映射可以获得真实的单行字段结构。
+        int inspected = 0;
+        foreach (JsonElement item in element.EnumerateArray())
+        {
+            if (inspected++ >= 50)
+            {
+                break;
+            }
+            if (item.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            foreach (JsonProperty property in item.EnumerateObject())
+            {
+                string childPath = string.IsNullOrEmpty(path)
+                    ? property.Name
+                    : $"{path}.{property.Name}";
+                WalkStructuredFields(
+                    snapshotId,
+                    property.Value,
+                    childPath,
+                    fields,
+                    fieldIndexes,
+                    ref order);
+            }
+        }
+    }
+
+    private static void AddOrMergeStructuredField(
+        ulong snapshotId,
+        JsonElement element,
+        string path,
+        List<DataFieldRecord> fields,
+        IDictionary<string, int> fieldIndexes,
+        ref int order)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
             return;
         }
 
@@ -655,7 +720,7 @@ public sealed class DataSourceWorkspaceService
             JsonValueKind.True or JsonValueKind.False => DataValueType.Boolean,
             _ => DataValueType.String,
         };
-        fields.Add(new DataFieldRecord
+        DataFieldRecord candidate = new()
         {
             Id = 0,
             SnapshotId = snapshotId,
@@ -668,7 +733,28 @@ public sealed class DataSourceWorkspaceService
             IsBindable = element.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined),
             SampleValueJson = element.GetRawText(),
             DisplayOrder = order++,
-        });
+        };
+
+        if (!fieldIndexes.TryGetValue(path, out int existingIndex))
+        {
+            fieldIndexes[path] = fields.Count;
+            fields.Add(candidate);
+            return;
+        }
+
+        DataFieldRecord existing = fields[existingIndex];
+        if (!existing.IsBindable && candidate.IsBindable)
+        {
+            fields[existingIndex] = candidate with
+            {
+                DisplayOrder = existing.DisplayOrder,
+                IsNullable = existing.IsNullable || candidate.IsNullable,
+            };
+        }
+        else if (candidate.IsNullable && !existing.IsNullable)
+        {
+            fields[existingIndex] = existing with { IsNullable = true };
+        }
     }
 
     private static string FriendlyFieldName(string path)
@@ -778,9 +864,24 @@ public sealed class PersistentDataSchemaProvider : IContextualDataSchemaProvider
             limit + 1,
             cancellationToken);
         bool truncated = fields.Count > limit;
-        IReadOnlyList<DataFieldNode> nodes = fields
+        IReadOnlyList<DataFieldRecord> selectedFields = fields
             .Take(limit)
-            .Select(ToNode)
+            .ToList()
+            .AsReadOnly();
+        IReadOnlyList<DataFieldNode>? completeTree = null;
+        if (selectedFields.Any(field => field.IsArray))
+        {
+            IReadOnlyList<DataFieldRecord> allFields = await _fields.ListAsync(
+                snapshotId,
+                null,
+                5000,
+                cancellationToken);
+            completeTree = BuildTree(allFields);
+        }
+        IReadOnlyList<DataFieldNode> nodes = selectedFields
+            .Select(field => completeTree is null
+                ? ToNode(field)
+                : FindNodeByPath(completeTree, field.FieldPath) ?? ToNode(field))
             .ToList()
             .AsReadOnly();
         return new DataSchemaSearchResult
@@ -876,48 +977,70 @@ public sealed class PersistentDataSchemaProvider : IContextualDataSchemaProvider
         };
         if (rows is not null)
         {
-            roots.Add(rows);
+            roots.Add(rows with
+            {
+                IsLeaf = columns.Count == 0,
+                Children = columns,
+            });
         }
 
         return roots.AsReadOnly();
+    }
+
+    private static DataFieldNode? FindNodeByPath(
+        IEnumerable<DataFieldNode> nodes,
+        string path)
+    {
+        foreach (DataFieldNode node in nodes)
+        {
+            if (string.Equals(node.Path, path, StringComparison.Ordinal))
+            {
+                return node;
+            }
+
+            DataFieldNode? child = FindNodeByPath(node.Children, path);
+            if (child is not null)
+            {
+                return child;
+            }
+        }
+
+        return null;
     }
 
     private static IReadOnlyList<DataFieldNode> BuildStructuredTree(
         IReadOnlyList<DataFieldRecord> fields)
     {
         List<MutableSchemaNode> roots = new();
-        Dictionary<string, MutableSchemaNode> groups = new(StringComparer.Ordinal);
+        Dictionary<string, MutableSchemaNode> nodes = new(StringComparer.Ordinal);
         foreach (DataFieldRecord field in fields)
         {
             string[] segments = field.FieldPath.Split(
                 '.',
                 StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            if (segments.Length <= 1)
-            {
-                roots.Add(MutableSchemaNode.Leaf(ToNode(field)));
-                continue;
-            }
-
             List<MutableSchemaNode> siblings = roots;
             string prefix = string.Empty;
-            for (int index = 0; index < segments.Length - 1; index++)
+            for (int index = 0; index < segments.Length; index++)
             {
                 prefix = string.IsNullOrEmpty(prefix)
                     ? segments[index]
                     : $"{prefix}.{segments[index]}";
-                if (!groups.TryGetValue(prefix, out MutableSchemaNode? group))
+                if (!nodes.TryGetValue(prefix, out MutableSchemaNode? node))
                 {
-                    group = MutableSchemaNode.Group(
+                    node = MutableSchemaNode.Group(
                         GroupDisplayName(prefix, segments[index], fields),
                         prefix);
-                    groups[prefix] = group;
-                    siblings.Add(group);
+                    nodes[prefix] = node;
+                    siblings.Add(node);
                 }
 
-                siblings = group.Children;
-            }
+                if (index == segments.Length - 1)
+                {
+                    node.SetLeaf(ToNode(field));
+                }
 
-            siblings.Add(MutableSchemaNode.Leaf(ToNode(field)));
+                siblings = node.Children;
+            }
         }
 
         return roots.Select(node => node.ToImmutable()).ToList().AsReadOnly();
@@ -984,7 +1107,7 @@ public sealed class PersistentDataSchemaProvider : IContextualDataSchemaProvider
 
     private sealed class MutableSchemaNode
     {
-        private readonly DataFieldNode? _leaf;
+        private DataFieldNode? _leaf;
 
         private MutableSchemaNode(string name, string path, DataFieldNode? leaf)
         {
@@ -1002,14 +1125,21 @@ public sealed class PersistentDataSchemaProvider : IContextualDataSchemaProvider
         internal static MutableSchemaNode Group(string name, string path) =>
             new(name, path, null);
 
-        internal static MutableSchemaNode Leaf(DataFieldNode leaf) =>
-            new(leaf.Name, leaf.Path, leaf);
+        internal void SetLeaf(DataFieldNode leaf) => _leaf = leaf;
 
         internal DataFieldNode ToImmutable()
         {
             if (_leaf is not null)
             {
-                return _leaf;
+                IReadOnlyList<DataFieldNode> children = Children
+                    .Select(child => child.ToImmutable())
+                    .ToList()
+                    .AsReadOnly();
+                return _leaf with
+                {
+                    IsLeaf = children.Count == 0,
+                    Children = children,
+                };
             }
 
             return new DataFieldNode
@@ -1033,6 +1163,9 @@ public sealed class PersistentDataSchemaProvider : IContextualDataSchemaProvider
         IsCollection = field.IsArray,
         IsLeaf = true,
         IsBindable = field.IsBindable,
+        Comment = field.Comment,
+        IsNullable = field.IsNullable,
+        SampleValueJson = field.SampleValueJson,
         Children = Array.Empty<DataFieldNode>(),
     };
 }

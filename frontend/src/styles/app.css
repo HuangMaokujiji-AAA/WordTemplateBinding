@@ -199,6 +199,16 @@ button:disabled {
   background: #ecfdf5;
 }
 
+.table-list-item {
+  border-left: 4px solid #14b8a6;
+  background: #f0fdfa;
+}
+
+.table-list-item.is-bound {
+  border-left-color: #14b8a6;
+  background: #ecfdf5;
+}
+
 .mock-list-item strong,
 .mock-list-item span {
   display: block;
@@ -297,8 +307,17 @@ button:disabled {
   background: #fef3c7;
 }
 
+.legend-table {
+  border-color: #14b8a6 !important;
+  background: #ccfbf1;
+}
+
 .chart-binding-card {
   border-left: 4px solid #f59e0b;
+}
+
+.table-binding-card {
+  border-left: 4px solid #14b8a6;
 }
 
 .tabs {
@@ -306,7 +325,7 @@ button:disabled {
   top: 0;
   z-index: 2;
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
   border-bottom: 1px solid var(--border);
   background: white;
 }

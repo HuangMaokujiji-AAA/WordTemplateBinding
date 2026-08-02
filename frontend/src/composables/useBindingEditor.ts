@@ -2,6 +2,7 @@ import { computed, ref, type Ref } from "vue";
 import type {
   ChartItem,
   MockItem,
+  TableItem,
   TemplateResponse,
 } from "../api/types";
 
@@ -9,13 +10,15 @@ export type WorkspaceTab =
   | "schema"
   | "bindings"
   | "properties"
-  | "chart-structure";
+  | "chart-structure"
+  | "table-structure";
 
 export const workspaceTabs: ReadonlyArray<readonly [WorkspaceTab, string]> = [
   ["schema", "数据源"],
   ["bindings", "已绑定"],
   ["properties", "属性"],
   ["chart-structure", "图表结构"],
+  ["table-structure", "表格映射"],
 ];
 
 export function useBindingEditor(
@@ -38,15 +41,24 @@ export function useBindingEditor(
         (chart) => chart.locatorId === selectedLocatorId.value
       ) || null
   );
+  const selectedTable = computed<TableItem | null>(
+    () =>
+      template.value?.tables?.find(
+        (table) => table.locatorId === selectedLocatorId.value
+      ) || null
+  );
   const boundItems = computed(
     () => template.value?.mockItems.filter((item) => item.isBound) || []
   );
   const boundCharts = computed(
     () => template.value?.charts.filter((chart) => chart.isBound) || []
   );
+  const boundTables = computed(
+    () => template.value?.tables?.filter((table) => table.isBound) || []
+  );
 
   function syncSelection(): void {
-    if (!selectedItem.value && !selectedChart.value) {
+    if (!selectedItem.value && !selectedChart.value && !selectedTable.value) {
       selectedLocatorId.value = null;
     }
   }
@@ -65,8 +77,10 @@ export function useBindingEditor(
     selectedLocatorId,
     selectedItem,
     selectedChart,
+    selectedTable,
     boundItems,
     boundCharts,
+    boundTables,
     syncSelection,
     resetBindingEditor,
   };

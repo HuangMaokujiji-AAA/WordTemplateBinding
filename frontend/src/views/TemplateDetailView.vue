@@ -16,6 +16,7 @@ import type {
   TemplateVersionView,
   TemplateElementRecord,
 } from "../api/types";
+import { formatDateTime } from "../shared/utils/dateTime";
 
 const route = useRoute();
 const router = useRouter();
@@ -291,21 +292,6 @@ function formatFileSize(bytes: number): string {
   return `${size} ${units[i]}`;
 }
 
-function formatDate(dateStr: string): string {
-  if (!dateStr) return "-";
-  try {
-    const d = new Date(dateStr);
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
-    const hour = String(d.getHours()).padStart(2, "0");
-    const min = String(d.getMinutes()).padStart(2, "0");
-    return `${year}-${month}-${day} ${hour}:${min}`;
-  } catch {
-    return dateStr;
-  }
-}
-
 /* ── lifecycle ────────────────────────────── */
 
 onMounted(async () => {
@@ -461,12 +447,12 @@ onMounted(async () => {
 
         <div class="info-field">
           <span class="info-label">创建时间</span>
-          <span class="info-value date">{{ formatDate(template.createdAt) }}</span>
+          <span class="info-value date">{{ formatDateTime(template.createdAt) }}</span>
         </div>
 
         <div class="info-field">
           <span class="info-label">更新时间</span>
-          <span class="info-value date">{{ formatDate(template.updatedAt) }}</span>
+          <span class="info-value date">{{ formatDateTime(template.updatedAt) }}</span>
         </div>
       </div>
     </div>
@@ -546,7 +532,7 @@ onMounted(async () => {
             </td>
             <td>{{ version.version.elementCount }}</td>
             <td class="cell-date">{{
-              formatDate(version.version.createdAt)
+              formatDateTime(version.version.createdAt)
             }}</td>
             <td>
               <div class="actions-cell">

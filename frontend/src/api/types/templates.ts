@@ -1,4 +1,5 @@
 import type { ChartItem, MockItem } from "./chart";
+import type { TableItem } from "./table";
 
 export interface PreviewHighlight {
   locatorId: string;
@@ -19,9 +20,11 @@ export interface TemplateResponse {
   contentHash: string;
   mockItemCount: number;
   chartCount: number;
+  tableCount: number;
   bindingCount: number;
   mockItems: MockItem[];
   charts: ChartItem[];
+  tables: TableItem[];
   preview: { paragraphs: PreviewParagraph[] };
   importSummary: TemplateImportSummary;
   createdAt: string;

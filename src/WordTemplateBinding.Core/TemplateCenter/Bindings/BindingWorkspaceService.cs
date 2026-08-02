@@ -114,7 +114,7 @@ public sealed class BindingWorkspaceService
         ValidateCompatibility(context.Element, context.Field);
         if (string.Equals(context.Element.ElementType, "TABLE", StringComparison.Ordinal))
         {
-            ValidateTableMapping(request.FormatConfigJson);
+            ValidateTableMapping(request.FormatConfigJson, context.Element);
         }
         BindingItemRecord saved = await _items.UpsertAsync(
             bindingSetId,
@@ -265,6 +265,10 @@ public sealed class BindingWorkspaceService
             try
             {
                 ValidateCompatibility(element, field);
+                if (string.Equals(element.ElementType, "TABLE", StringComparison.Ordinal))
+                {
+                    ValidateTableMapping(item.FormatConfigJson, element);
+                }
             }
             catch (BindingValidationException exception)
             {
@@ -604,7 +608,9 @@ public sealed class BindingWorkspaceService
         }
     }
 
-    private static void ValidateTableMapping(string? json)
+    private static void ValidateTableMapping(
+        string? json,
+        TemplateElementRecord element)
     {
         if (string.IsNullOrWhiteSpace(json))
         {
@@ -627,12 +633,67 @@ public sealed class BindingWorkspaceService
             {
                 throw new BindingValidationException("表格列映射不能为空。");
             }
+
+            TableBindingMapping? mapping = root.Deserialize<TableBindingMapping>(JsonOptions);
+            if (mapping is null || mapping.HeaderRowCount < 1)
+            {
+                throw new BindingValidationException("表格表头行数必须大于或等于 1。");
+            }
+
+            using JsonDocument schemaDocument = JsonDocument.Parse(
+                element.BindingSchemaJson ?? "{}");
+            JsonElement schema = schemaDocument.RootElement;
+            int templateRowCount = schema.TryGetProperty("templateRowCount", out JsonElement rows)
+                ? rows.GetInt32()
+                : 2;
+            if (mapping.HeaderRowCount >= templateRowCount)
+            {
+                throw new BindingValidationException(
+                    $"表格表头行数必须小于模板总行数 {templateRowCount}。");
+            }
+
+            int columnCount = schema.TryGetProperty("tableColumns", out JsonElement tableColumns) &&
+                              tableColumns.ValueKind == JsonValueKind.Array
+                ? tableColumns.GetArrayLength()
+                : element.LocatorJson.Contains("headerSignature", StringComparison.Ordinal)
+                    ? ReadTableColumnCount(element.LocatorJson)
+                    : int.MaxValue;
+            HashSet<int> usedColumns = new();
+            foreach (TableColumnBinding column in mapping.Columns)
+            {
+                if (column.ColumnIndex < 0 || column.ColumnIndex >= columnCount)
+                {
+                    throw new BindingValidationException(
+                        $"表格列索引 {column.ColumnIndex} 超出有效范围 0～{columnCount - 1}。");
+                }
+                if (!usedColumns.Add(column.ColumnIndex))
+                {
+                    throw new BindingValidationException(
+                        $"表格第 {column.ColumnIndex + 1} 列存在重复映射。");
+                }
+                if (string.IsNullOrWhiteSpace(column.SourceField))
+                {
+                    throw new BindingValidationException(
+                        $"表格第 {column.ColumnIndex + 1} 列的数据字段不能为空。");
+                }
+            }
         }
         catch (JsonException exception)
         {
             throw new BindingValidationException(
                 $"表格列映射配置无效：{exception.Message}");
         }
+    }
+
+    private static int ReadTableColumnCount(string locatorJson)
+    {
+        using JsonDocument locator = JsonDocument.Parse(locatorJson);
+        string signature = locator.RootElement.TryGetProperty(
+            "headerSignature",
+            out JsonElement value)
+            ? value.GetString() ?? string.Empty
+            : string.Empty;
+        return Math.Max(1, signature.Split('|').Length);
     }
 
     private static BindingSuggestion ScoreSuggestion(
