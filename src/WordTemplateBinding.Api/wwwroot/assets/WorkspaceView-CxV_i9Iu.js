@@ -1,1 +1,0 @@
-import{D as e,m as t,x as n}from"./index-DRA41ujn.js";import{t as r}from"./BindFieldsStep-pVpb41cp.js";var i=n({__name:`WorkspaceView`,setup(n){return(n,i)=>(e(),t(r))}});export{i as default};

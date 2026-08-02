@@ -22,6 +22,7 @@ import {
   hydrateTemplateResponse,
   listBindingItems,
   listChapters,
+  listDataFields,
   listDataSources,
   listPersistentTemplates,
   listTemplateSegmentElements,
@@ -81,6 +82,10 @@ import {
 } from "../../binding/renderedTableBindings";
 import { formatImportSummary } from "../../binding/importSummaryStatus";
 import { buildChartWorkspace, type ChartWorkspaceItem } from "../../binding/chartWorkspace";
+import {
+  buildTableFieldOptions,
+  type TableFieldOption,
+} from "../../binding/tableFieldOptions";
 import {
   useBindingEditor,
   workspaceTabs,
@@ -168,25 +173,10 @@ const selectedChartWorkspaceItem = computed<ChartWorkspaceItem | null>(
 const selectedTableDataPath = computed(
   () => pendingTableField.value?.path || selectedTable.value?.boundDataPath || ""
 );
-const selectedTableFieldOptions = computed(() => {
-  const dataPath = selectedTableDataPath.value;
-  if (!dataPath) return [];
-  const field = pendingTableField.value?.path === dataPath
-    ? pendingTableField.value
-    : findSchemaNode(schema.value?.nodes || [], dataPath);
-  if (!field) return [];
-  const prefix = `${field.path}[]`;
-  return flattenSchemaNodes(field.children)
-    .filter((node) => node.isLeaf)
-    .map((node) => ({
-      label: `${node.name} · ${node.type}`,
-      value: node.path.startsWith(`${prefix}.`)
-        ? node.path.slice(prefix.length + 1)
-        : node.path.startsWith(`${field.path}.`)
-          ? node.path.slice(field.path.length + 1)
-        : node.path.split(".").at(-1) || node.name,
-    }));
-});
+const selectedTableFieldOptions = ref<TableFieldOption[]>([]);
+const tableFieldOptionsLoading = ref(false);
+const tableFieldOptionsError = ref("");
+let tableFieldOptionsTaskId = 0;
 const footerMockCount = computed(
   () =>
     template.value?.mockItems.filter(
@@ -206,10 +196,6 @@ let renderTaskId = 0;
 let searchTimer: ReturnType<typeof setTimeout> | undefined;
 let bootstrappingContext = true;
 
-function flattenSchemaNodes(nodes: DataFieldNode[]): DataFieldNode[] {
-  return nodes.flatMap((node) => [node, ...flattenSchemaNodes(node.children)]);
-}
-
 function findSchemaNode(nodes: DataFieldNode[], path: string): DataFieldNode | null {
   for (const node of nodes) {
     if (node.path === path) return node;
@@ -217,6 +203,54 @@ function findSchemaNode(nodes: DataFieldNode[], path: string): DataFieldNode | n
     if (nested) return nested;
   }
   return null;
+}
+
+async function loadSelectedTableFieldOptions(): Promise<void> {
+  const taskId = ++tableFieldOptionsTaskId;
+  const dataSourceId = selectedDataSourceId.value;
+  const dataPath = selectedTableDataPath.value;
+  selectedTableFieldOptions.value = [];
+  tableFieldOptionsError.value = "";
+  if (!dataSourceId || !dataPath) {
+    tableFieldOptionsLoading.value = false;
+    return;
+  }
+
+  const currentNode = pendingTableField.value?.path === dataPath
+    ? pendingTableField.value
+    : findSchemaNode(schema.value?.nodes || [], dataPath);
+  if (currentNode?.children.length) {
+    const currentOptions = buildTableFieldOptions(dataPath, currentNode);
+    if (currentOptions.length > 0) {
+      selectedTableFieldOptions.value = currentOptions;
+      tableFieldOptionsLoading.value = false;
+      return;
+    }
+  }
+
+  tableFieldOptionsLoading.value = true;
+  const [schemaResult, fieldsResult] = await Promise.allSettled([
+    getPersistentSchema(dataSourceId, dataPath),
+    listDataFields(dataSourceId),
+  ]);
+  if (taskId !== tableFieldOptionsTaskId) return;
+
+  const searchedNode = schemaResult.status === "fulfilled"
+    ? findSchemaNode(schemaResult.value.nodes, dataPath)
+    : null;
+  const fields = fieldsResult.status === "fulfilled" ? fieldsResult.value : [];
+  selectedTableFieldOptions.value = buildTableFieldOptions(
+    dataPath,
+    searchedNode || currentNode,
+    fields
+  );
+  tableFieldOptionsLoading.value = false;
+  if (selectedTableFieldOptions.value.length === 0) {
+    tableFieldOptionsError.value = schemaResult.status === "rejected" &&
+      fieldsResult.status === "rejected"
+      ? `读取数据源字段失败：${errorMessage(schemaResult.reason)}`
+      : "该 Array 暂未识别到可用于表格列映射的内部字段，请刷新数据源快照。";
+  }
 }
 
 function setZoom(value: number): void {
@@ -295,6 +329,11 @@ watch(selectedDataSourceId, () => {
   if (bootstrappingContext) return;
   void loadSchema(schemaQuery.value);
 });
+
+watch(
+  [selectedDataSourceId, selectedTableDataPath, schema],
+  () => void loadSelectedTableFieldOptions()
+);
 
 watch(zoomPercent, () => {
   syncPreviewSurfaceWidth();
@@ -1567,6 +1606,8 @@ function partLabel(item: MockItem): string {
             :table="selectedTable"
             :data-path="selectedTableDataPath"
             :field-options="selectedTableFieldOptions"
+            :field-options-loading="tableFieldOptionsLoading"
+            :field-options-error="tableFieldOptionsError"
             @save="handleSaveTableMapping"
           />
         </section>
