@@ -136,6 +136,10 @@ const renderedChartCount = ref(0);
 const unresolvedLocatorIds = ref<string[]>([]);
 const unresolvedChartIds = ref<string[]>([]);
 const docxViewerRef = ref<InstanceType<typeof DocxViewer> | null>(null);
+const previewCanvas = ref<HTMLElement | null>(null);
+const previewSurfaceWidth = ref(0);
+const zoomPercent = ref(100);
+const zoomOptions = Array.from({ length: 11 }, (_, index) => 50 + index * 10);
 
 const chartStats = ref(createEmptyChartStats());
 const parsedCharts = ref<ParsedWordChart[]>([]);
@@ -167,6 +171,64 @@ let renderTaskId = 0;
 let searchTimer: ReturnType<typeof setTimeout> | undefined;
 let bootstrappingContext = true;
 
+function setZoom(value: number): void {
+  zoomPercent.value = Math.min(150, Math.max(50, value));
+}
+
+function zoomOut(): void {
+  setZoom(zoomPercent.value - 10);
+}
+
+function zoomIn(): void {
+  setZoom(zoomPercent.value + 10);
+}
+
+function naturalPageWidth(): number {
+  const container = docxViewerRef.value?.getDocumentContainer();
+  if (!container) return 0;
+  return Math.max(
+    0,
+    ...[...container.querySelectorAll<HTMLElement>("section.docx")]
+      .map((page) => page.offsetWidth)
+  );
+}
+
+function syncPreviewSurfaceWidth(): void {
+  const canvas = previewCanvas.value;
+  const pageWidth = naturalPageWidth();
+  if (!canvas || pageWidth <= 0) {
+    previewSurfaceWidth.value = 0;
+    return;
+  }
+
+  const scale = zoomPercent.value / 100;
+  const availableWidth = Math.max(1, canvas.clientWidth - 48);
+  // The extra 24px accounts for DocxViewer's horizontal page gutter.
+  previewSurfaceWidth.value = Math.ceil(
+    Math.max(pageWidth + 24, availableWidth / scale)
+  );
+}
+
+async function centerPreview(): Promise<void> {
+  await nextTick();
+  const canvas = previewCanvas.value;
+  if (!canvas) return;
+  canvas.scrollLeft = Math.max(0, (canvas.scrollWidth - canvas.clientWidth) / 2);
+}
+
+function fitWidth(allowEnlarge = true): void {
+  const canvas = previewCanvas.value;
+  const pageWidth = naturalPageWidth();
+  if (!canvas || pageWidth <= 0 || canvas.clientWidth <= 72) return;
+
+  const availableWidth = Math.max(1, canvas.clientWidth - 72);
+  const fittedPercent =
+    Math.floor((availableWidth / pageWidth) * 100 / 10) * 10;
+  setZoom(allowEnlarge ? fittedPercent : Math.min(100, fittedPercent));
+  syncPreviewSurfaceWidth();
+  void centerPreview();
+}
+
 onMounted(() => {
   void loadWorkspaceContext();
 });
@@ -184,6 +246,11 @@ watch(selectedProjectId, () => {
 watch(selectedDataSourceId, () => {
   if (bootstrappingContext) return;
   void loadSchema(schemaQuery.value);
+});
+
+watch(zoomPercent, () => {
+  syncPreviewSurfaceWidth();
+  void centerPreview();
 });
 
 onUnmounted(() => {
@@ -497,6 +564,7 @@ function resetTemplateState(): void {
 
 function cleanupPreview(): void {
   chartInstanceManager.disposeAll();
+  previewSurfaceWidth.value = 0;
   const containers = getViewerContainers();
   if (!containers) return;
   containers.documentContainer.replaceChildren();
@@ -770,6 +838,8 @@ async function loadSelectedSegment(): Promise<void> {
     await refreshBindingContext();
     await refreshTemplateBindings();
     decorateCurrentTemplate(containers.documentContainer);
+    syncPreviewSurfaceWidth();
+    fitWidth(false);
     setStatus(`已加载片段：${current?.segmentName || selectedSegmentId.value}。`);
   } catch (error) {
     if (taskId === renderTaskId) setStatus(errorMessage(error), true);
@@ -1169,9 +1239,46 @@ function partLabel(item: MockItem): string {
         />
       </aside>
 
-      <main class="preview-column">
+      <main ref="previewCanvas" class="preview-column">
         <div class="preview-notice" :class="{ 'is-error': statusIsError }">
-          <strong>{{ statusMessage }}</strong>
+          <div class="preview-notice-heading">
+            <strong>{{ statusMessage }}</strong>
+            <div class="preview-zoom" aria-label="Word 预览缩放">
+              <button
+                type="button"
+                title="缩小"
+                aria-label="缩小 Word 预览"
+                :disabled="zoomPercent <= 50"
+                @click="zoomOut"
+              >
+                −
+              </button>
+              <select
+                v-model.number="zoomPercent"
+                title="选择缩放比例"
+                aria-label="Word 预览缩放比例"
+              >
+                <option v-for="option in zoomOptions" :key="option" :value="option">
+                  {{ option }}%
+                </option>
+              </select>
+              <button
+                type="button"
+                title="放大"
+                aria-label="放大 Word 预览"
+                :disabled="zoomPercent >= 150"
+                @click="zoomIn"
+              >
+                +
+              </button>
+              <button type="button" title="恢复原始大小" @click="setZoom(100)">
+                100%
+              </button>
+              <button type="button" title="按预览区域宽度缩放" @click="fitWidth()">
+                适应宽度
+              </button>
+            </div>
+          </div>
           <span>网页效果仅用于定位与绑定；批量赋值和最终文件生成均由后端 C# 处理。</span>
           <span class="preview-legend">
             <i class="legend-body"></i>正文模拟值
@@ -1179,7 +1286,15 @@ function partLabel(item: MockItem): string {
             <i class="legend-chart"></i>可绑定图表
           </span>
         </div>
-        <DocxViewer ref="docxViewerRef" :visible="documentVisible" />
+        <div
+          class="binding-preview-zoom-content"
+          :style="{
+            '--preview-zoom': zoomPercent / 100,
+            width: previewSurfaceWidth ? `${previewSurfaceWidth}px` : '100%',
+          }"
+        >
+          <DocxViewer ref="docxViewerRef" :visible="documentVisible" />
+        </div>
       </main>
 
       <aside class="workspace-panel right-panel">
@@ -1417,6 +1532,107 @@ function partLabel(item: MockItem): string {
 .studio-binding-actions span {
   color: #667085;
   font-size: 12px;
+}
+
+.preview-notice-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.preview-notice-heading > strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-zoom {
+  display: flex;
+  flex: none;
+  gap: 4px;
+  align-items: center;
+}
+
+.preview-zoom button,
+.preview-zoom select {
+  height: 26px;
+  border: 1px solid #cbd5e1;
+  border-radius: 5px;
+  background: #fff;
+  color: #475467;
+  font: 10px/1 system-ui, sans-serif;
+}
+
+.preview-zoom button {
+  min-width: 27px;
+  padding: 0 7px;
+  cursor: pointer;
+}
+
+.preview-zoom button:hover:not(:disabled),
+.preview-zoom select:hover {
+  border-color: #7890d8;
+  color: #2949b8;
+}
+
+.preview-zoom button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.preview-zoom select {
+  padding: 0 4px;
+}
+
+.binding-preview-zoom-content {
+  --preview-zoom: 1;
+  zoom: var(--preview-zoom);
+}
+
+@supports not (zoom: 1) {
+  .binding-preview-zoom-content {
+    transform: scale(var(--preview-zoom));
+    transform-origin: top left;
+  }
+}
+
+/*
+ * docx-preview may render mixed-width pages (for example portrait pages next
+ * to landscape/chart pages). Let the preview surface follow the widest page,
+ * then center every page independently so a wide page cannot pull the rest of
+ * the document away from the visual center.
+ */
+.preview-column :deep(.docx-viewer-wrapper) {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+}
+
+.preview-column :deep(.docx-viewer__document),
+.preview-column :deep(.docx-wrapper) {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  margin-inline: auto;
+}
+
+.preview-column :deep(.docx-wrapper) {
+  display: block !important;
+}
+
+.preview-column :deep(.docx-wrapper > section.docx) {
+  margin-right: auto !important;
+  margin-left: auto !important;
+}
+
+.preview-column :deep(.docx-wrapper > section.docx article p),
+.preview-column :deep(.docx-wrapper > section.docx article p > span) {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: pre-wrap !important;
 }
 
 .studio-binding-actions button {
