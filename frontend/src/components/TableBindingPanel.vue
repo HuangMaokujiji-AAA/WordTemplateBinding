@@ -6,11 +6,16 @@ import type {
   TableItem,
 } from "../api/types";
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   table: TableItem | null;
   dataPath: string;
   fieldOptions: Array<{ label: string; value: string }>;
-}>();
+  fieldOptionsLoading?: boolean;
+  fieldOptionsError?: string;
+}>(), {
+  fieldOptionsLoading: false,
+  fieldOptionsError: "",
+});
 
 const emit = defineEmits<{
   save: [payload: {
@@ -35,6 +40,10 @@ const filterValue = ref("");
 const errorMessage = computed(() => {
   if (!props.table) return "请先选择一个表格。";
   if (!props.dataPath) return "请先给表格选择一个 Array 集合字段。";
+  if (props.fieldOptionsError) return props.fieldOptionsError;
+  if (!props.fieldOptionsLoading && props.fieldOptions.length === 0) {
+    return "当前 Array 没有可供选择的内部数据字段，请刷新数据源快照。";
+  }
   if (headerRowCount.value < 1 || headerRowCount.value >= props.table.templateRowCount) {
     return `表头行数必须在 1～${Math.max(1, props.table.templateRowCount - 1)} 之间。`;
   }
@@ -117,6 +126,12 @@ watch(
     <p v-if="!dataPath" class="table-binding-notice">
       请先在“数据源”页选择一个 Array 字段，系统会在保存映射时一起建立表格绑定。
     </p>
+    <p v-else-if="fieldOptionsLoading" class="table-binding-notice">
+      正在读取绑定数据源中的字段…
+    </p>
+    <p v-else-if="fieldOptions.length > 0" class="table-binding-field-status">
+      已读取 {{ fieldOptions.length }} 个可用于列映射的数据字段。
+    </p>
 
     <label class="table-header-count">
       <span>表头行数</span>
@@ -134,7 +149,7 @@ watch(
           </div>
           <label>
             <span>数据字段</span>
-            <select v-model="row.sourceField">
+            <select v-model="row.sourceField" :disabled="fieldOptionsLoading">
               <option value="">不绑定此列（导出清空）</option>
               <option value="rowNumber">自动序号</option>
               <option v-for="field in fieldOptions" :key="field.value" :value="field.value">
@@ -163,7 +178,12 @@ watch(
     </details>
 
     <p v-if="errorMessage" class="table-binding-error">{{ errorMessage }}</p>
-    <button type="button" class="table-binding-save" :disabled="Boolean(errorMessage)" @click="save">
+    <button
+      type="button"
+      class="table-binding-save"
+      :disabled="fieldOptionsLoading || Boolean(errorMessage)"
+      @click="save"
+    >
       保存表格绑定与列映射
     </button>
   </div>
@@ -172,6 +192,7 @@ watch(
 <style scoped>
 .table-binding-empty,
 .table-binding-notice,
+.table-binding-field-status,
 .table-binding-panel p {
   color: #64748b;
   font-size: 11px;
@@ -206,6 +227,14 @@ watch(
   padding: 9px;
   border-radius: 6px;
   background: #fff7ed;
+}
+
+.table-binding-field-status {
+  margin: 0;
+  padding: 8px 9px;
+  border-radius: 6px;
+  background: #ecfdf5;
+  color: #047857;
 }
 
 .table-header-count,
